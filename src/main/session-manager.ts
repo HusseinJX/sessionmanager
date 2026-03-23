@@ -1,7 +1,7 @@
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, Notification } from 'electron'
 
 // Use a runtime require to load node-pty so Vite/Rollup doesn't try to bundle
 // the native addon (.node file). The /* @vite-ignore */ comment suppresses the
@@ -148,8 +148,17 @@ export class SessionManager {
       const wasWaiting = session.inputWaiting
       session.inputWaiting = detectInputWaiting(recent)
 
-      if (session.inputWaiting && !wasWaiting && this.win && !this.win.isDestroyed()) {
-        this.win.webContents.send('terminal:input-waiting', { id: meta.id })
+      if (session.inputWaiting && !wasWaiting) {
+        if (this.win && !this.win.isDestroyed()) {
+          this.win.webContents.send('terminal:input-waiting', { id: meta.id })
+        }
+        if (Notification.isSupported()) {
+          new Notification({
+            title: `${session.meta.name} is waiting`,
+            body: 'A terminal needs your input.',
+            silent: false
+          }).show()
+        }
       }
     })
 
