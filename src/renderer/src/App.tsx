@@ -32,6 +32,9 @@ declare global {
       onInputWaiting: (
         callback: (event: { id: string }) => void
       ) => () => void
+      onInputResolved: (
+        callback: (event: { id: string }) => void
+      ) => () => void
       onFocusSession: (
         callback: (event: { id: string }) => void
       ) => () => void
@@ -179,6 +182,10 @@ export default function App(): React.ReactElement {
       }
     })
 
+    const removeInputResolved = window.api.onInputResolved(({ id }) => {
+      setInputWaiting(id, false)
+    })
+
     const removeFocusSession = window.api.onFocusSession(({ id }) => {
       setExpandedSession(id)
     })
@@ -187,6 +194,7 @@ export default function App(): React.ReactElement {
       removeOutput()
       removeExit()
       removeInputWaiting()
+      removeInputResolved()
       removeFocusSession()
     }
   }, [appendPreviewLine, updateSessionStatus, setInputWaiting])

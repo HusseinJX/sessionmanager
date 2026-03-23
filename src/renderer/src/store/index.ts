@@ -233,8 +233,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           [sessionId]: {
             ...existing,
             previewLines: newLines,
-            hasNewOutput: !isExpanded,
-            inputWaiting: false
+            hasNewOutput: !isExpanded
           }
         }
       }

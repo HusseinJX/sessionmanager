@@ -48,7 +48,7 @@ interface PtySession {
 // Deliberately excludes shell prompts ($, %, #, >) — those fire after every
 // command and would cause constant false positives.
 const PROMPT_PATTERNS = [
-  /\(y\/n\)\s*[?:]?\s*$/i,       // y/n confirmations
+  /\(y\/n\)\s*[?:]?\s*$/i,       // y/n confirmations — (y/N), (Y/n), (y/n)
   /\[y\/n\]\s*[?:]?\s*$/i,       // [y/n] style
   /\[Y\/n\]\s*[?:]?\s*$/i,
   /\[y\/N\]\s*[?:]?\s*$/i,
@@ -57,6 +57,8 @@ const PROMPT_PATTERNS = [
   />>>\s*$/,                     // Python REPL
   /\?\s*$/,                      // ends with "?" (confirmation questions)
   /:\s*$/,                       // ends with ":" (read prompts like "Enter name: ")
+  /^\s*[❯›>]\s+\S/,             // TUI selection cursor (Claude Code / inquirer menus)
+  /\(Use arrow keys\)/i,         // inquirer multi-choice prompt
 ]
 
 function detectInputWaiting(output: string): boolean {
@@ -188,6 +190,12 @@ export class SessionManager extends EventEmitter {
       const recent = session.outputBuffer.slice(-5).join('')
       const wasWaiting = session.inputWaiting
       session.inputWaiting = detectInputWaiting(recent)
+
+      if (!session.inputWaiting && wasWaiting) {
+        if (this.win && !this.win.isDestroyed()) {
+          this.win.webContents.send('terminal:input-resolved', { id: meta.id })
+        }
+      }
 
       if (session.inputWaiting && !wasWaiting) {
         if (this.win && !this.win.isDestroyed()) {

@@ -72,6 +72,13 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('terminal:input-waiting', handler)
   },
 
+  onInputResolved: (callback: InputWaitingCallback): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, event: TerminalInputWaitingEvent): void =>
+      callback(event)
+    ipcRenderer.on('terminal:input-resolved', handler)
+    return () => ipcRenderer.removeListener('terminal:input-resolved', handler)
+  },
+
   onFocusSession: (callback: (event: { id: string }) => void): (() => void) => {
     const handler = (_: Electron.IpcRendererEvent, event: { id: string }): void => callback(event)
     ipcRenderer.on('terminal:focus-session', handler)
