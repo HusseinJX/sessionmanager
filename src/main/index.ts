@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, shell, screen } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, shell, screen } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
 import { sessionManager } from './session-manager'
@@ -188,11 +188,43 @@ async function init(): Promise<void> {
   registerIpcHandlers(win)
 
   // Global shortcut to open/focus the app
-  globalShortcut.register('CommandOrControl+Shift+T', () => {
+  const settings = getSettings()
+  const initialHotkey = settings.hotkey || 'CommandOrControl+Shift+T'
+  globalShortcut.register(initialHotkey, () => {
     if (win?.isVisible()) {
       win.hide()
     } else {
       showWindow()
+    }
+  })
+
+  // IPC: re-register global shortcut with a new accelerator
+  ipcMain.handle('settings:set-hotkey', async (_, { accelerator }: { accelerator: string }) => {
+    try {
+      globalShortcut.unregisterAll()
+      const ok = globalShortcut.register(accelerator, () => {
+        if (win?.isVisible()) {
+          win.hide()
+        } else {
+          showWindow()
+        }
+      })
+      if (!ok) {
+        // Registration failed (key in use or invalid) — restore old one
+        const prev = getSettings().hotkey || 'CommandOrControl+Shift+T'
+        globalShortcut.register(prev, () => {
+          if (win?.isVisible()) {
+            win.hide()
+          } else {
+            showWindow()
+          }
+        })
+        return { ok: false, error: 'Hotkey registration failed — it may be in use by another app.' }
+      }
+      setSettings({ hotkey: accelerator })
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: String(err) }
     }
   })
 

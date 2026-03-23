@@ -23,6 +23,7 @@ export interface AppSettings {
   gridColumns: string
   windowWidth: number
   windowHeight: number
+  hotkey: string
 }
 
 export interface StoreSchema {
@@ -62,13 +63,15 @@ const schema = {
       theme: 'dark',
       gridColumns: 'auto',
       windowWidth: 1200,
-      windowHeight: 800
+      windowHeight: 800,
+      hotkey: 'CommandOrControl+Shift+T'
     } as AppSettings,
     properties: {
       theme: { type: 'string', default: 'dark' },
       gridColumns: { type: 'string', default: 'auto' },
       windowWidth: { type: 'number', default: 1200 },
-      windowHeight: { type: 'number', default: 800 }
+      windowHeight: { type: 'number', default: 800 },
+      hotkey: { type: 'string', default: 'CommandOrControl+Shift+T' }
     }
   }
 }
@@ -89,7 +92,8 @@ export function getSettings(): AppSettings {
     theme: 'dark',
     gridColumns: 'auto',
     windowWidth: 1200,
-    windowHeight: 800
+    windowHeight: 800,
+    hotkey: 'CommandOrControl+Shift+T'
   })
 }
 

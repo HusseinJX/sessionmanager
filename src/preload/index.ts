@@ -117,5 +117,10 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('config:apply', { config, pathRemappings }),
 
   browseDirectory: (): Promise<string | null> =>
-    ipcRenderer.invoke('dialog:browse-directory')
+    ipcRenderer.invoke('dialog:browse-directory'),
+
+  // ─── Hotkey ─────────────────────────────────────────────────────────────
+
+  setHotkey: (accelerator: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('settings:set-hotkey', { accelerator })
 })

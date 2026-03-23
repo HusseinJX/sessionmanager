@@ -31,6 +31,7 @@ export interface AppSettings {
   gridColumns: string
   windowWidth: number
   windowHeight: number
+  hotkey: string
 }
 
 interface AppState {
@@ -105,7 +106,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     theme: 'dark',
     gridColumns: 'auto',
     windowWidth: 1200,
-    windowHeight: 800
+    windowHeight: 800,
+    hotkey: 'CommandOrControl+Shift+T'
   },
 
   setProjects: (projects) => set({ projects }),

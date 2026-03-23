@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store'
 
 interface MissingPath {
@@ -15,14 +15,105 @@ interface ImportValidation {
   config?: unknown
 }
 
-export default function ConfigPanel(): React.ReactElement {
-  const { setShowConfigPanel, setProjects, setActiveProject } = useAppStore()
+function formatAccelerator(accelerator: string): string {
+  return accelerator
+    .replace('CommandOrControl', '⌘/Ctrl')
+    .replace('Command', '⌘')
+    .replace('Control', 'Ctrl')
+    .replace('Shift', '⇧')
+    .replace('Alt', '⌥')
+    .replace(/\+/g, ' + ')
+}
 
-  const [tab, setTab] = useState<'export' | 'import'>('export')
+function recordKeyDown(e: KeyboardEvent): string | null {
+  // Ignore bare modifier keypresses
+  if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) return null
+
+  const parts: string[] = []
+  if (e.ctrlKey) parts.push('Control')
+  if (e.metaKey) parts.push('Command')
+  if (e.altKey) parts.push('Alt')
+  if (e.shiftKey) parts.push('Shift')
+
+  // Map KeyboardEvent.key to Electron accelerator key names
+  const keyMap: Record<string, string> = {
+    ' ': 'Space', Enter: 'Return', Escape: 'Escape', Tab: 'Tab',
+    Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+    F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6',
+    F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12',
+  }
+  const key = keyMap[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : null)
+  if (!key) return null
+
+  parts.push(key)
+  return parts.join('+')
+}
+
+export default function ConfigPanel(): React.ReactElement {
+  const { setShowConfigPanel, setProjects, setActiveProject, settings } = useAppStore()
+
+  const [tab, setTab] = useState<'settings' | 'export' | 'import'>('settings')
   const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
   const [importValidation, setImportValidation] = useState<ImportValidation | null>(null)
   const [pathRemappings, setPathRemappings] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
+
+  // Hotkey state
+  const [recording, setRecording] = useState(false)
+  const [pendingHotkey, setPendingHotkey] = useState<string | null>(null)
+  const currentHotkey = settings.hotkey || 'CommandOrControl+Shift+T'
+
+  const startRecording = (): void => {
+    setPendingHotkey(null)
+    setRecording(true)
+    setStatus(null)
+  }
+
+  const cancelRecording = (): void => {
+    setRecording(false)
+    setPendingHotkey(null)
+  }
+
+  const handleKeyCapture = useCallback((e: KeyboardEvent) => {
+    if (!recording) return
+    e.preventDefault()
+    e.stopPropagation()
+    const accelerator = recordKeyDown(e)
+    if (accelerator) {
+      setPendingHotkey(accelerator)
+      setRecording(false)
+    }
+  }, [recording])
+
+  useEffect(() => {
+    if (recording) {
+      window.addEventListener('keydown', handleKeyCapture, true)
+      return () => window.removeEventListener('keydown', handleKeyCapture, true)
+    }
+    return undefined
+  }, [recording, handleKeyCapture])
+
+  const saveHotkey = async (): Promise<void> => {
+    if (!pendingHotkey) return
+    setLoading(true)
+    setStatus(null)
+    try {
+      const result = await window.api.setHotkey(pendingHotkey)
+      if (result.ok) {
+        useAppStore.getState().setSettings({ hotkey: pendingHotkey })
+        setPendingHotkey(null)
+        setStatus({ type: 'success', message: `Hotkey saved: ${pendingHotkey}` })
+      } else {
+        setStatus({ type: 'error', message: result.error || 'Failed to set hotkey.' })
+      }
+    } catch (err) {
+      setStatus({ type: 'error', message: `Error: ${err}` })
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleClose = (): void => {
     setShowConfigPanel(false)
@@ -103,7 +194,7 @@ export default function ConfigPanel(): React.ReactElement {
       <div className="bg-bg-card border border-border-subtle rounded-lg w-full max-w-lg mx-4 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
-          <h2 className="text-sm font-semibold text-text-primary">Config Export / Import</h2>
+          <h2 className="text-sm font-semibold text-text-primary">Settings</h2>
           <button
             className="text-text-muted hover:text-text-primary text-lg leading-none"
             onClick={handleClose}
@@ -114,7 +205,7 @@ export default function ConfigPanel(): React.ReactElement {
 
         {/* Tabs */}
         <div className="flex border-b border-border-subtle">
-          {(['export', 'import'] as const).map((t) => (
+          {(['settings', 'export', 'import'] as const).map((t) => (
             <button
               key={t}
               className={`px-5 py-2 text-sm border-b-2 transition-colors capitalize ${
@@ -126,6 +217,7 @@ export default function ConfigPanel(): React.ReactElement {
                 setTab(t)
                 setStatus(null)
                 setImportValidation(null)
+                cancelRecording()
               }}
             >
               {t}
@@ -134,6 +226,66 @@ export default function ConfigPanel(): React.ReactElement {
         </div>
 
         <div className="px-5 py-4 space-y-4">
+          {tab === 'settings' && (
+            <>
+              <div>
+                <p className="text-sm font-medium text-text-primary mb-1">Global hotkey</p>
+                <p className="text-xs text-text-muted mb-3">
+                  Opens or hides SessionManager from anywhere on your desktop.
+                </p>
+
+                {/* Current hotkey display */}
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs text-text-muted">Current:</span>
+                  <kbd className="px-2 py-1 bg-bg-overlay border border-border-subtle rounded text-xs font-mono text-text-primary">
+                    {formatAccelerator(currentHotkey)}
+                  </kbd>
+                </div>
+
+                {/* Recording / pending state */}
+                {recording ? (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 px-3 py-2 bg-bg-overlay border border-accent-yellow rounded text-xs text-accent-yellow animate-pulse font-mono">
+                      Press your new hotkey combination…
+                    </div>
+                    <button
+                      className="px-3 py-2 text-xs text-text-muted hover:text-text-primary border border-border-subtle rounded transition-colors"
+                      onClick={cancelRecording}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : pendingHotkey ? (
+                  <div className="flex items-center gap-2">
+                    <kbd className="flex-1 px-3 py-2 bg-bg-overlay border border-accent-blue rounded text-xs font-mono text-text-primary">
+                      {formatAccelerator(pendingHotkey)}
+                    </kbd>
+                    <button
+                      disabled={loading}
+                      className="px-3 py-2 bg-accent-green text-bg-base rounded text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+                      onClick={saveHotkey}
+                    >
+                      {loading ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      className="px-3 py-2 text-xs text-text-muted hover:text-text-primary border border-border-subtle rounded transition-colors"
+                      onClick={cancelRecording}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="px-4 py-2 bg-bg-overlay border border-border-subtle text-text-primary rounded text-sm hover:border-accent-blue transition-colors"
+                    onClick={startRecording}
+                  >
+                    Set new hotkey…
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+
           {tab === 'export' && (
             <>
               <p className="text-sm text-text-muted">

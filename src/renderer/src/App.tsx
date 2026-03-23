@@ -60,6 +60,7 @@ declare global {
         pathRemappings?: Record<string, string>
       ) => Promise<{ ok: boolean }>
       browseDirectory: () => Promise<string | null>
+      setHotkey: (accelerator: string) => Promise<{ ok: boolean; error?: string }>
     }
   }
 }
@@ -79,7 +80,8 @@ export default function App(): React.ReactElement {
     initSessionState,
     updateSessionStatus,
     setInputWaiting,
-    appendPreviewLine
+    appendPreviewLine,
+    setSettings
   } = useAppStore()
 
   // Load initial state from main process and restart all pty processes
@@ -87,6 +89,9 @@ export default function App(): React.ReactElement {
     async function loadInitialState(): Promise<void> {
       try {
         const state = await window.api.getStoreState()
+        if (state.settings) {
+          setSettings(state.settings)
+        }
         if (state.projects && state.projects.length > 0) {
           setProjects(state.projects)
           setActiveProject(state.projects[0].id)
