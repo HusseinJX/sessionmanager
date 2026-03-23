@@ -10,9 +10,9 @@ interface TerminalCardProps {
 function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: boolean }): React.ReactElement {
   if (inputWaiting) {
     return (
-      <span className="flex items-center gap-1 text-xs text-accent-yellow">
-        <span className="w-1.5 h-1.5 rounded-full bg-accent-yellow animate-pulse inline-block" />
-        waiting
+      <span className="flex items-center gap-1 text-xs text-accent-red font-semibold">
+        <span className="w-2 h-2 rounded-full bg-accent-red animate-ping inline-block" />
+        needs input
       </span>
     )
   }
@@ -85,7 +85,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
         transition-all duration-150 hover:shadow-lg
         flex flex-col group relative
         ${inputWaiting
-          ? 'border-accent-yellow'
+          ? 'border-accent-red shadow-[0_0_0_1px_theme(colors.accent-red/0.4)]'
           : status === 'exited'
           ? 'border-accent-red border-opacity-50'
           : hasNewOutput

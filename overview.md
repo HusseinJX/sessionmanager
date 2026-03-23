@@ -240,3 +240,17 @@ Routes:
 Bug: pressing `⌘+⌥+P` recorded `⌘ + ⌥ + Π` because `e.key` on macOS returns the Unicode character produced by the Option combination. Fixed by switching to `e.code` (physical key location, e.g. `KeyP`) in `recordKeyDown()`. `e.code` is unaffected by modifier key character substitution.
 
 **File changed:** `src/renderer/src/components/ConfigPanel.tsx`
+
+---
+
+## Checkpoint 6 — Smarter input-waiting alerts (red badges + chime + visibility gating)
+
+Three-part change to notification behavior:
+
+1. **OS notification gated on window visibility** — `session-manager.ts` now checks `win.isVisible()` before firing the macOS/Windows/Linux toast. If the window is open, the in-app alert handles it instead.
+
+2. **In-app alert chime** — `App.tsx` plays a two-tone Web Audio chime when `input-waiting` fires, unless the exact waiting terminal is currently expanded AND the document is visible (user can already see it). Uses `AudioContext` with no external dependencies.
+
+3. **Red visual alerts** — `inputWaiting` state is now red throughout instead of yellow:
+   - `TerminalCard.tsx`: red border with glow, pinging red dot, "needs input" label (bold)
+   - `ProjectTabs.tsx`: pinging red dot badge on any project tab that has a waiting session — allows user to identify the right project at a glance

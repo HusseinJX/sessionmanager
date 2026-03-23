@@ -178,7 +178,8 @@ export class SessionManager extends EventEmitter {
         if (this.win && !this.win.isDestroyed()) {
           this.win.webContents.send('terminal:input-waiting', { id: meta.id })
         }
-        if (Notification.isSupported()) {
+        // Only fire OS notification when the window is hidden — in-app sound handles the visible case
+        if (!this.win?.isVisible() && Notification.isSupported()) {
           new Notification({
             title: `${session.meta.name} is waiting`,
             body: 'A terminal needs your input.',

@@ -5,12 +5,16 @@ export default function ProjectTabs(): React.ReactElement {
   const {
     projects,
     activeProjectId,
+    sessionStates,
     setActiveProject,
     setShowAddProjectModal,
     setShowAddSessionModal,
     removeProject,
     renameProject
   } = useAppStore()
+
+  const projectHasWaiting = (projectId: string): boolean =>
+    Object.values(sessionStates).some((s) => s.projectId === projectId && s.inputWaiting)
 
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -86,6 +90,9 @@ export default function ProjectTabs(): React.ReactElement {
               />
             ) : (
               <span className="text-sm">{project.name}</span>
+            )}
+            {projectHasWaiting(project.id) && (
+              <span className="w-2 h-2 rounded-full bg-accent-red animate-ping flex-shrink-0" title="Terminal needs input" />
             )}
 
             <button
