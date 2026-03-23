@@ -42,7 +42,15 @@ interface PtySession {
   batchBuffer: string
   inputWaiting: boolean
   lastOutputTime: number
+  activityBytes: number  // bytes received since last idle-fire or writeToSession
 }
+
+// Idle-based input-waiting detection: if a running session receives >= this
+// many bytes and then goes silent for IDLE_MS, it's probably waiting for input.
+// Keeps false positives low (filters tiny shell redraws) while catching Claude
+// Code, Open Code, and any other TUI whose prompts don't match regex patterns.
+const IDLE_MS = 1000
+const MIN_ACTIVITY_BYTES = 300
 
 // Heuristic: patterns that mean a process is waiting for specific user input.
 // Deliberately excludes shell prompts ($, %, #, >) — those fire after every
@@ -120,13 +128,47 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  private emitInputWaiting(id: string, session: PtySession): void {
+    if (this.win && !this.win.isDestroyed()) {
+      this.win.webContents.send('terminal:input-waiting', { id })
+    }
+    if (!this.win?.isVisible() && Notification.isSupported()) {
+      const notification = new Notification({
+        title: `${session.meta.name} is waiting`,
+        body: 'A terminal needs your input.',
+        silent: false
+      })
+      notification.on('click', () => {
+        this.showWindowFn?.()
+        if (this.win && !this.win.isDestroyed()) {
+          this.win.webContents.send('terminal:focus-session', { id })
+        }
+      })
+      notification.show()
+    }
+    this.emit('input-waiting', id)
+  }
+
   private flushBatches(): void {
     if (!this.win || this.win.isDestroyed()) return
+    const now = Date.now()
     for (const [id, session] of this.sessions) {
       if (session.batchBuffer.length > 0) {
         const data = session.batchBuffer
         session.batchBuffer = ''
         this.win.webContents.send('terminal:output', { id, data })
+      }
+      // Idle-based input-waiting detection — catches TUI prompts (Claude Code,
+      // Open Code, etc.) that don't match simple regex patterns.
+      if (
+        !session.inputWaiting &&
+        session.meta.status === 'running' &&
+        session.activityBytes >= MIN_ACTIVITY_BYTES &&
+        now - session.lastOutputTime >= IDLE_MS
+      ) {
+        session.inputWaiting = true
+        session.activityBytes = 0
+        this.emitInputWaiting(id, session)
       }
     }
   }
@@ -168,7 +210,8 @@ export class SessionManager extends EventEmitter {
       outputBuffer: [],
       batchBuffer: '',
       inputWaiting: false,
-      lastOutputTime: Date.now()
+      lastOutputTime: Date.now(),
+      activityBytes: 0
     }
 
     this.sessions.set(meta.id, session)
@@ -176,6 +219,7 @@ export class SessionManager extends EventEmitter {
     pty.onData((data: string) => {
       session.batchBuffer += data
       session.lastOutputTime = Date.now()
+      session.activityBytes += data.length
 
       // Keep scrollback buffer (last 5000 lines worth)
       session.outputBuffer.push(data)
@@ -186,37 +230,22 @@ export class SessionManager extends EventEmitter {
 
       this.emit('output', meta.id, data)
 
-      // Detect input waiting
+      // Fast-path pattern detection (passwords, y/n, etc.)
       const recent = session.outputBuffer.slice(-5).join('')
       const wasWaiting = session.inputWaiting
-      session.inputWaiting = detectInputWaiting(recent)
+      const nowWaiting = detectInputWaiting(recent)
 
-      if (!session.inputWaiting && wasWaiting) {
+      if (!nowWaiting && wasWaiting) {
+        session.inputWaiting = false
         if (this.win && !this.win.isDestroyed()) {
           this.win.webContents.send('terminal:input-resolved', { id: meta.id })
         }
       }
 
-      if (session.inputWaiting && !wasWaiting) {
-        if (this.win && !this.win.isDestroyed()) {
-          this.win.webContents.send('terminal:input-waiting', { id: meta.id })
-        }
-        // Only fire OS notification when the window is hidden — in-app sound handles the visible case
-        if (!this.win?.isVisible() && Notification.isSupported()) {
-          const notification = new Notification({
-            title: `${session.meta.name} is waiting`,
-            body: 'A terminal needs your input.',
-            silent: false
-          })
-          notification.on('click', () => {
-            this.showWindowFn?.()
-            if (this.win && !this.win.isDestroyed()) {
-              this.win.webContents.send('terminal:focus-session', { id: meta.id })
-            }
-          })
-          notification.show()
-        }
-        this.emit('input-waiting', meta.id)
+      if (nowWaiting && !wasWaiting) {
+        session.inputWaiting = true
+        session.activityBytes = 0
+        this.emitInputWaiting(meta.id, session)
       }
     })
 
@@ -253,6 +282,14 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id)
     if (!session) return false
     session.pty.write(data)
+    // User responded — reset activity tracking and clear waiting state
+    session.activityBytes = 0
+    if (session.inputWaiting) {
+      session.inputWaiting = false
+      if (this.win && !this.win.isDestroyed()) {
+        this.win.webContents.send('terminal:input-resolved', { id })
+      }
+    }
     return true
   }
 
