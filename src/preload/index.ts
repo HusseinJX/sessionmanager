@@ -122,5 +122,15 @@ contextBridge.exposeInMainWorld('api', {
   // ─── Hotkey ─────────────────────────────────────────────────────────────
 
   setHotkey: (accelerator: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke('settings:set-hotkey', { accelerator })
+    ipcRenderer.invoke('settings:set-hotkey', { accelerator }),
+
+  // ─── HTTP API server ─────────────────────────────────────────────────────
+
+  getServerInfo: (): Promise<{
+    enabled: boolean
+    running: boolean
+    port: number
+    token: string
+    url: string
+  }> => ipcRenderer.invoke('server:info')
 })

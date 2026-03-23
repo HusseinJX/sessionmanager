@@ -1,6 +1,7 @@
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
+import { EventEmitter } from 'events'
 import { BrowserWindow, Notification } from 'electron'
 
 // Use a runtime require to load node-pty so Vite/Rollup doesn't try to bundle
@@ -16,8 +17,22 @@ export interface SessionMeta {
   cwd: string
   command?: string
   projectId: string
+  projectName?: string
   status: 'running' | 'exited'
   exitCode?: number
+}
+
+export interface SessionStatus {
+  id: string
+  name: string
+  cwd: string
+  command?: string
+  projectId: string
+  projectName?: string
+  status: 'running' | 'exited'
+  exitCode?: number
+  inputWaiting: boolean
+  recentLines: string[]
 }
 
 interface PtySession {
@@ -44,6 +59,15 @@ function detectInputWaiting(output: string): boolean {
   return PROMPT_PATTERNS.some((p) => p.test(lastLine))
 }
 
+function stripAnsiForExport(str: string): string {
+  return str
+    .replace(/\x1b\[[0-9;]*[mGKJHfABCDEFsuST]/g, '')
+    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b[>=]/g, '')
+    .replace(/\x1b[()][A-Z0-9]/g, '')
+    .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '')
+}
+
 function getDefaultShell(): string {
   if (process.platform === 'win32') return 'powershell.exe'
   return process.env.SHELL || '/bin/bash'
@@ -56,7 +80,7 @@ function resolveHome(p: string): string {
   return p
 }
 
-export class SessionManager {
+export class SessionManager extends EventEmitter {
   private sessions = new Map<string, PtySession>()
   private win: BrowserWindow | null = null
   private batchInterval: NodeJS.Timeout | null = null
@@ -143,6 +167,8 @@ export class SessionManager {
         session.outputBuffer = session.outputBuffer.slice(-400)
       }
 
+      this.emit('output', meta.id, data)
+
       // Detect input waiting
       const recent = session.outputBuffer.slice(-5).join('')
       const wasWaiting = session.inputWaiting
@@ -159,6 +185,7 @@ export class SessionManager {
             silent: false
           }).show()
         }
+        this.emit('input-waiting', meta.id)
       }
     })
 
@@ -168,6 +195,7 @@ export class SessionManager {
       if (this.win && !this.win.isDestroyed()) {
         this.win.webContents.send('terminal:exit', { id: meta.id, code: exitCode })
       }
+      this.emit('exit', meta.id, exitCode)
     })
 
     // If there's a launch command, send it after a brief delay
@@ -190,10 +218,11 @@ export class SessionManager {
     this.sessions.delete(id)
   }
 
-  writeToSession(id: string, data: string): void {
+  writeToSession(id: string, data: string): boolean {
     const session = this.sessions.get(id)
-    if (!session) return
+    if (!session) return false
     session.pty.write(data)
+    return true
   }
 
   resizeSession(id: string, cols: number, rows: number): void {
@@ -220,6 +249,41 @@ export class SessionManager {
 
   isInputWaiting(id: string): boolean {
     return this.sessions.get(id)?.inputWaiting ?? false
+  }
+
+  getAllSessionsStatus(): SessionStatus[] {
+    const result: SessionStatus[] = []
+    for (const [id, session] of this.sessions) {
+      result.push({
+        id,
+        name: session.meta.name,
+        cwd: session.meta.cwd,
+        command: session.meta.command,
+        projectId: session.meta.projectId,
+        projectName: session.meta.projectName,
+        status: session.meta.status,
+        exitCode: session.meta.exitCode,
+        inputWaiting: session.inputWaiting,
+        recentLines: this.extractRecentLines(session, 5)
+      })
+    }
+    return result
+  }
+
+  getRecentLines(id: string, n: number): string[] | null {
+    const session = this.sessions.get(id)
+    if (!session) return null
+    return this.extractRecentLines(session, n)
+  }
+
+  private extractRecentLines(session: PtySession, n: number): string[] {
+    const raw = session.outputBuffer.join('')
+    const stripped = stripAnsiForExport(raw)
+    const lines = stripped
+      .split(/\r?\n/)
+      .map((l) => l.trimEnd())
+      .filter((l) => l.length > 0)
+    return lines.slice(-n)
   }
 
   killAll(): void {

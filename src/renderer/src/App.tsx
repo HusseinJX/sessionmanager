@@ -61,6 +61,13 @@ declare global {
       ) => Promise<{ ok: boolean }>
       browseDirectory: () => Promise<string | null>
       setHotkey: (accelerator: string) => Promise<{ ok: boolean; error?: string }>
+      getServerInfo: () => Promise<{
+        enabled: boolean
+        running: boolean
+        port: number
+        token: string
+        url: string
+      }>
     }
   }
 }

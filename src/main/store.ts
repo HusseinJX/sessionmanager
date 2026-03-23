@@ -24,6 +24,9 @@ export interface AppSettings {
   windowWidth: number
   windowHeight: number
   hotkey: string
+  serverPort: number
+  serverToken: string
+  serverEnabled: boolean
 }
 
 export interface StoreSchema {
@@ -64,14 +67,20 @@ const schema = {
       gridColumns: 'auto',
       windowWidth: 1200,
       windowHeight: 800,
-      hotkey: 'CommandOrControl+Shift+T'
+      hotkey: 'CommandOrControl+Shift+T',
+      serverPort: 7543,
+      serverToken: '',
+      serverEnabled: true
     } as AppSettings,
     properties: {
       theme: { type: 'string', default: 'dark' },
       gridColumns: { type: 'string', default: 'auto' },
       windowWidth: { type: 'number', default: 1200 },
       windowHeight: { type: 'number', default: 800 },
-      hotkey: { type: 'string', default: 'CommandOrControl+Shift+T' }
+      hotkey: { type: 'string', default: 'CommandOrControl+Shift+T' },
+      serverPort: { type: 'number', default: 7543 },
+      serverToken: { type: 'string', default: '' },
+      serverEnabled: { type: 'boolean', default: true }
     }
   }
 }
@@ -93,7 +102,10 @@ export function getSettings(): AppSettings {
     gridColumns: 'auto',
     windowWidth: 1200,
     windowHeight: 800,
-    hotkey: 'CommandOrControl+Shift+T'
+    hotkey: 'CommandOrControl+Shift+T',
+    serverPort: 7543,
+    serverToken: '',
+    serverEnabled: true
   })
 }
 

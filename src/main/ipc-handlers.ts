@@ -11,6 +11,7 @@ import {
   addSession,
   removeSession
 } from './store'
+import type { AppSettings } from './store'
 import { exportConfig, importConfig, applyImportedConfig, ExportConfig } from './config-io'
 
 export function registerIpcHandlers(win: BrowserWindow): void {
@@ -20,12 +21,15 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     'terminal:create',
     async (_, args: { id?: string; name: string; cwd: string; command?: string; projectId: string }) => {
       const id = args.id || uuidv4()
+      const projects = getProjects()
+      const project = projects.find((p) => p.id === args.projectId)
       sessionManager.createSession({
         id,
         name: args.name,
         cwd: args.cwd,
         command: args.command,
         projectId: args.projectId,
+        projectName: project?.name,
         status: 'running'
       })
       return { id }

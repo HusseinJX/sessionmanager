@@ -65,6 +65,13 @@ export default function ConfigPanel(): React.ReactElement {
   const [pendingHotkey, setPendingHotkey] = useState<string | null>(null)
   const currentHotkey = settings.hotkey || 'CommandOrControl+Shift+T'
 
+  // Server info state
+  const [serverInfo, setServerInfo] = useState<{
+    enabled: boolean; running: boolean; port: number; token: string; url: string
+  } | null>(null)
+  const [tokenVisible, setTokenVisible] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
+
   const startRecording = (): void => {
     setPendingHotkey(null)
     setRecording(true)
@@ -94,6 +101,20 @@ export default function ConfigPanel(): React.ReactElement {
     }
     return undefined
   }, [recording, handleKeyCapture])
+
+  // Load server info when settings tab is shown
+  useEffect(() => {
+    if (tab === 'settings') {
+      window.api.getServerInfo().then(setServerInfo).catch(() => setServerInfo(null))
+    }
+  }, [tab])
+
+  const copyToClipboard = (text: string, key: string): void => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(key)
+      setTimeout(() => setCopied(null), 1500)
+    })
+  }
 
   const saveHotkey = async (): Promise<void> => {
     if (!pendingHotkey) return
@@ -281,6 +302,75 @@ export default function ConfigPanel(): React.ReactElement {
                   >
                     Set new hotkey…
                   </button>
+                )}
+              </div>
+
+              {/* API Server section */}
+              <div className="border-t border-border-subtle pt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="text-sm font-medium text-text-primary">API server</p>
+                  {serverInfo && (
+                    <span className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                      serverInfo.running
+                        ? 'bg-accent-green bg-opacity-15 text-accent-green'
+                        : 'bg-accent-red bg-opacity-15 text-accent-red'
+                    }`}>
+                      {serverInfo.running ? 'running' : 'stopped'}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-text-muted mb-3">
+                  Local HTTP server your web dashboard connects to. Bind to <code className="font-mono">127.0.0.1</code> only.
+                </p>
+
+                {serverInfo ? (
+                  <div className="space-y-2">
+                    {/* Base URL */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-text-muted w-12 flex-shrink-0">URL</span>
+                      <code className="flex-1 bg-bg-overlay border border-border-subtle rounded px-2 py-1 text-xs font-mono text-text-primary truncate">
+                        {serverInfo.url}
+                      </code>
+                      <button
+                        className="text-xs text-text-muted hover:text-text-primary px-2 py-1 border border-border-subtle rounded transition-colors flex-shrink-0"
+                        onClick={() => copyToClipboard(serverInfo.url, 'url')}
+                      >
+                        {copied === 'url' ? '✓' : 'Copy'}
+                      </button>
+                    </div>
+
+                    {/* Token */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-text-muted w-12 flex-shrink-0">Token</span>
+                      <code className="flex-1 bg-bg-overlay border border-border-subtle rounded px-2 py-1 text-xs font-mono text-text-primary truncate">
+                        {tokenVisible ? serverInfo.token : '••••••••••••••••••••'}
+                      </code>
+                      <button
+                        className="text-xs text-text-muted hover:text-text-primary px-2 py-1 border border-border-subtle rounded transition-colors flex-shrink-0"
+                        onClick={() => setTokenVisible((v) => !v)}
+                      >
+                        {tokenVisible ? 'Hide' : 'Show'}
+                      </button>
+                      <button
+                        className="text-xs text-text-muted hover:text-text-primary px-2 py-1 border border-border-subtle rounded transition-colors flex-shrink-0"
+                        onClick={() => copyToClipboard(serverInfo.token, 'token')}
+                      >
+                        {copied === 'token' ? '✓' : 'Copy'}
+                      </button>
+                    </div>
+
+                    {/* Quick reference */}
+                    <div className="bg-bg-overlay rounded p-2 mt-1">
+                      <p className="text-xs text-text-muted font-mono leading-relaxed">
+                        GET  {serverInfo.url}/api/status<br />
+                        GET  {serverInfo.url}/api/events  <span className="text-accent-blue">(SSE)</span><br />
+                        GET  {serverInfo.url}/api/sessions/:id/logs<br />
+                        POST {serverInfo.url}/api/sessions/:id/command
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-text-muted italic">Loading server info…</p>
                 )}
               </div>
             </>

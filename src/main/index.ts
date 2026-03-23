@@ -1,13 +1,16 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, shell, screen } from 'electron'
 import * as path from 'path'
 import * as os from 'os'
+import * as crypto from 'crypto'
 import { sessionManager } from './session-manager'
+import { HttpApiServer } from './http-server'
 import { registerIpcHandlers } from './ipc-handlers'
 import { getSettings, setSettings, getProjects } from './store'
 
 // Prevent window from being garbage collected
 let tray: Tray | null = null
 let win: BrowserWindow | null = null
+let httpServer: HttpApiServer | null = null
 
 const isDev = !app.isPackaged
 
@@ -228,6 +231,34 @@ async function init(): Promise<void> {
     }
   })
 
+  // HTTP API server
+  const serverSettings = getSettings()
+  let serverToken = serverSettings.serverToken
+  if (!serverToken) {
+    serverToken = crypto.randomBytes(24).toString('hex')
+    setSettings({ serverToken })
+  }
+  const serverPort = serverSettings.serverPort || 7543
+  if (serverSettings.serverEnabled !== false) {
+    httpServer = new HttpApiServer(sessionManager, serverPort, serverToken)
+    httpServer.start().catch((err) => {
+      console.error('HTTP API server failed to start:', err)
+      httpServer = null
+    })
+  }
+
+  // IPC: get server info (port, token, running status)
+  ipcMain.handle('server:info', async () => {
+    const s = getSettings()
+    return {
+      enabled: s.serverEnabled !== false,
+      running: httpServer?.isRunning() ?? false,
+      port: httpServer?.getPort() ?? s.serverPort ?? 7543,
+      token: s.serverToken,
+      url: `http://127.0.0.1:${httpServer?.getPort() ?? s.serverPort ?? 7543}`
+    }
+  })
+
   // Restore sessions from store on launch
   restoreSessionsFromStore()
 }
@@ -242,6 +273,7 @@ function restoreSessionsFromStore(): void {
         cwd: session.cwd,
         command: session.command,
         projectId: project.id,
+        projectName: project.name,
         status: 'running'
       })
     }
@@ -252,6 +284,7 @@ function restoreSessionsFromStore(): void {
 app.whenReady().then(init)
 
 app.on('before-quit', () => {
+  httpServer?.stop()
   sessionManager.killAll()
   globalShortcut.unregisterAll()
 })
