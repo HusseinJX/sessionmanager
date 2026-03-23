@@ -43,6 +43,7 @@ interface PtySession {
   inputWaiting: boolean
   lastOutputTime: number
   activityBytes: number  // bytes received since last idle-fire or writeToSession
+  hadInput: boolean      // true after first real input (user or launch command)
 }
 
 // Idle-based input-waiting detection: if a running session receives >= this
@@ -162,6 +163,7 @@ export class SessionManager extends EventEmitter {
       // Open Code, etc.) that don't match simple regex patterns.
       if (
         !session.inputWaiting &&
+        session.hadInput &&
         session.meta.status === 'running' &&
         session.activityBytes >= MIN_ACTIVITY_BYTES &&
         now - session.lastOutputTime >= IDLE_MS
@@ -211,7 +213,8 @@ export class SessionManager extends EventEmitter {
       batchBuffer: '',
       inputWaiting: false,
       lastOutputTime: Date.now(),
-      activityBytes: 0
+      activityBytes: 0,
+      hadInput: !!meta.command  // launch-command sessions count as having input
     }
 
     this.sessions.set(meta.id, session)
@@ -282,7 +285,8 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id)
     if (!session) return false
     session.pty.write(data)
-    // User responded — reset activity tracking and clear waiting state
+    // User responded — mark as having had input, reset activity tracking
+    session.hadInput = true
     session.activityBytes = 0
     if (session.inputWaiting) {
       session.inputWaiting = false
