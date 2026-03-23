@@ -188,3 +188,55 @@ When exporting a config and importing it on a different OS, paths need to match 
 - **Tailwind CSS** (styling)
 - **electron-store** (persistence)
 - **TypeScript** throughout
+
+---
+
+## Checkpoint 1 — Initial scaffold committed
+
+Committed the full initial application to git. All core v1 features were already implemented in the scaffold:
+
+- `src/main/index.ts` — Electron tray app, global shortcut (`Cmd+Shift+T`), menubar popup window
+- `src/main/session-manager.ts` — node-pty session lifecycle, ANSI output batching at 60fps, input-waiting detection via `PROMPT_PATTERNS`
+- `src/main/ipc-handlers.ts` — IPC bridge for terminal create/destroy/input/resize/history
+- `src/main/store.ts` — electron-store persistence for projects and settings
+- `src/main/config-io.ts` — JSON export/import with path validation and remapping
+- `src/renderer/` — React UI: ProjectTabs, TerminalGrid, TerminalCard (with yellow "waiting" badge), FullTerminal overlay, AddSession/AddProject modals, ConfigPanel
+- `.gitignore` added (excludes `node_modules/`, `out/`, `dist/`)
+
+---
+
+## Checkpoint 2 — OS-level input-waiting notifications
+
+Added Electron `Notification` API calls to `session-manager.ts`. When a terminal transitions from not-waiting → waiting (detected via `PROMPT_PATTERNS`), the app fires an OS-level toast notification with the session name. Fires once per transition. Works on macOS (Notification Center), Windows (toast), Linux (libnotify). The in-app visual indicator (yellow card border + pulsing badge) was already in place.
+
+**File changed:** `src/main/session-manager.ts`
+
+---
+
+## Checkpoint 3 — Configurable global hotkey
+
+Added a Settings tab to the ConfigPanel (⚙ button). User clicks "Set new hotkey…", presses a key combo, sees a preview, then saves. The main process re-registers `globalShortcut` immediately with `unregisterAll()` + re-register. Falls back to old hotkey if registration fails (key in use). Hotkey is persisted to `electron-store`.
+
+**Files changed:** `src/main/store.ts`, `src/main/index.ts`, `src/preload/index.ts`, `src/renderer/src/store/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/components/ConfigPanel.tsx`
+
+---
+
+## Checkpoint 4 — Embedded HTTP API server for web dashboard
+
+Added `src/main/http-server.ts` — a Node.js `http` server binding to `127.0.0.1` (default port 7543) with Bearer token auth (token auto-generated on first run, stored in settings).
+
+Routes:
+- `GET /api/status` — all sessions with name, project, status, inputWaiting, last 5 lines
+- `GET /api/sessions/:id/logs?lines=30` — last N ANSI-stripped lines for one session
+- `POST /api/sessions/:id/command` — `{ "command": "..." }` runs in target terminal
+- `GET /api/events` — SSE stream; sends `connected` snapshot on connect, then `output` / `status` / `input-waiting` events in real time
+
+`SessionManager` now extends `EventEmitter` and emits `output`, `exit`, `input-waiting`. The HTTP server subscribes to these to push SSE to connected web clients. `SessionMeta` gained `projectName` (populated at session creation). Settings tab shows server URL, masked token with show/copy, and route quick-reference.
+
+---
+
+## Checkpoint 5 — Fix hotkey recorder on macOS with Option key
+
+Bug: pressing `⌘+⌥+P` recorded `⌘ + ⌥ + Π` because `e.key` on macOS returns the Unicode character produced by the Option combination. Fixed by switching to `e.code` (physical key location, e.g. `KeyP`) in `recordKeyDown()`. `e.code` is unaffected by modifier key character substitution.
+
+**File changed:** `src/renderer/src/components/ConfigPanel.tsx`
