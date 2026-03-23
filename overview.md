@@ -264,3 +264,11 @@ Two bugs fixed:
 1. **Pattern detection broken for generic prompts** — `PROMPT_PATTERNS` didn't cover prompts like `First Prompt: ` (ends with `: `). Added `/:s*$/` and `/\?\s*$/` patterns. Also, raw PTY output contains ANSI escape sequences that break `$` anchors — `detectInputWaiting` now strips ANSI before matching (using the existing `stripAnsiForExport` helper).
 
 2. **Audio silently failing** — Chromium starts `AudioContext` in `suspended` state due to autoplay policy. Fixed by calling `ctx.resume().then(play)` when suspended before scheduling oscillators.
+
+---
+
+## Checkpoint 8 — Fix false-positive chimes and missing OS notifications
+
+Root cause: `[$#%>]\s*$` matched the shell prompt itself, so `inputWaiting` flipped true after every command completed. This caused: (1) a chime on every command, and (2) `wasWaiting` already being `true` when a real interactive prompt appeared — suppressing the false→true transition needed to fire the OS notification.
+
+Fix: removed shell prompt patterns and `...` from `PROMPT_PATTERNS`. Only genuinely interactive patterns remain: y/n, password, passphrase, Python `>>>`, `?`-ending, and `:` -ending with a length guard (≤80 chars) to filter verbose log output.

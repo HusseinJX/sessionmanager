@@ -44,16 +44,19 @@ interface PtySession {
   lastOutputTime: number
 }
 
-// Heuristic: common shell prompt patterns to detect input waiting
+// Heuristic: patterns that mean a process is waiting for specific user input.
+// Deliberately excludes shell prompts ($, %, #, >) — those fire after every
+// command and would cause constant false positives.
 const PROMPT_PATTERNS = [
-  /[$#%>]\s*$/,           // shell prompts
-  />>>\s*$/,              // Python / REPL
-  /\.\.\.\s*$/,           // continuation prompt
-  /\(y\/n\)\s*[?:]?\s*$/i,
-  /password[:\s]*$/i,
-  /enter\s+passphrase/i,
-  /:\s*$/,                // generic "Label:" prompts (e.g. "First Prompt: ")
-  /\?\s*$/,               // question prompts
+  /\(y\/n\)\s*[?:]?\s*$/i,       // y/n confirmations
+  /\[y\/n\]\s*[?:]?\s*$/i,       // [y/n] style
+  /\[Y\/n\]\s*[?:]?\s*$/i,
+  /\[y\/N\]\s*[?:]?\s*$/i,
+  /password[:\s]*$/i,            // password prompts
+  /enter\s+passphrase/i,         // SSH passphrases
+  />>>\s*$/,                     // Python REPL
+  /\?\s*$/,                      // ends with "?" (confirmation questions)
+  /:\s*$/,                       // ends with ":" (read prompts like "Enter name: ")
 ]
 
 function detectInputWaiting(output: string): boolean {
@@ -61,6 +64,8 @@ function detectInputWaiting(output: string): boolean {
   // that break end-of-line regex anchors
   const stripped = stripAnsiForExport(output)
   const lastLine = stripped.split(/\r?\n/).filter((l) => l.trim()).pop() || ''
+  // The generic ":" pattern is kept short to avoid matching verbose log lines
+  if (/:\s*$/.test(lastLine) && lastLine.length > 80) return false
   return PROMPT_PATTERNS.some((p) => p.test(lastLine))
 }
 
