@@ -35,18 +35,28 @@ function recordKeyDown(e: KeyboardEvent): string | null {
   if (e.altKey) parts.push('Alt')
   if (e.shiftKey) parts.push('Shift')
 
-  // Map KeyboardEvent.key to Electron accelerator key names
-  const keyMap: Record<string, string> = {
-    ' ': 'Space', Enter: 'Return', Escape: 'Escape', Tab: 'Tab',
-    Backspace: 'Backspace', Delete: 'Delete', Insert: 'Insert',
+  // Use e.code (physical key) not e.key — on macOS, Option+P produces e.key='Π'
+  // but e.code='KeyP', which is what we actually want for the accelerator.
+  const codeMap: Record<string, string> = {
+    Space: 'Space', Enter: 'Return', NumpadEnter: 'Return',
+    Escape: 'Escape', Tab: 'Tab', Backspace: 'Backspace',
+    Delete: 'Delete', Insert: 'Insert',
     ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
     Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
-    F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5', F6: 'F6',
-    F7: 'F7', F8: 'F8', F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12',
   }
-  const key = keyMap[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : null)
-  if (!key) return null
 
+  let key: string | null = null
+  if (e.code in codeMap) {
+    key = codeMap[e.code]
+  } else if (e.code.startsWith('Key')) {
+    key = e.code.slice(3)           // 'KeyP' → 'P'
+  } else if (e.code.startsWith('Digit')) {
+    key = e.code.slice(5)           // 'Digit1' → '1'
+  } else if (/^F\d+$/.test(e.code)) {
+    key = e.code                    // 'F5' → 'F5'
+  }
+
+  if (!key) return null
   parts.push(key)
   return parts.join('+')
 }
