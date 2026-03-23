@@ -2,6 +2,33 @@ import React, { useState, useRef, KeyboardEvent } from 'react'
 import { useAppStore, SessionConfig } from '../store'
 import TextPreview from './TextPreview'
 
+async function forkSession(
+  session: SessionConfig,
+  projectId: string
+): Promise<void> {
+  const { addSessionToProject, initSessionState } = useAppStore.getState()
+  try {
+    const stored = await window.api.addSessionToStore(projectId, {
+      name: session.name,
+      cwd: session.cwd
+    })
+    addSessionToProject(projectId, {
+      id: stored.id,
+      name: session.name,
+      cwd: session.cwd
+    })
+    initSessionState(stored.id, projectId)
+    await window.api.createTerminal({
+      id: stored.id,
+      name: session.name,
+      cwd: session.cwd,
+      projectId
+    })
+  } catch (err) {
+    console.error('Failed to fork session:', err)
+  }
+}
+
 interface TerminalCardProps {
   session: SessionConfig
   projectId: string
@@ -104,6 +131,13 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
           {hasNewOutput && (
             <span className="w-1.5 h-1.5 rounded-full bg-accent-blue flex-shrink-0" title="New output" />
           )}
+          <button
+            className="opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-accent-green flex-shrink-0 text-xs leading-none px-0.5"
+            title="Open new terminal in same folder"
+            onClick={(e) => { e.stopPropagation(); forkSession(session, projectId) }}
+          >
+            ＋
+          </button>
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={status} inputWaiting={inputWaiting} />
