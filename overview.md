@@ -272,3 +272,9 @@ Two bugs fixed:
 Root cause: `[$#%>]\s*$` matched the shell prompt itself, so `inputWaiting` flipped true after every command completed. This caused: (1) a chime on every command, and (2) `wasWaiting` already being `true` when a real interactive prompt appeared — suppressing the false→true transition needed to fire the OS notification.
 
 Fix: removed shell prompt patterns and `...` from `PROMPT_PATTERNS`. Only genuinely interactive patterns remain: y/n, password, passphrase, Python `>>>`, `?`-ending, and `:` -ending with a length guard (≤80 chars) to filter verbose log output.
+
+---
+
+## Checkpoint 9 — Notification click opens the waiting terminal in expanded view
+
+Added `setShowWindow(fn)` to `SessionManager` so the notification click handler can call `showWindow()` (which positions the tray popup correctly) without a circular dependency. On click: shows the window, then sends `terminal:focus-session` IPC to the renderer. Renderer subscribes in `App.tsx` and calls `setExpandedSession(id)` to open that terminal full-screen.

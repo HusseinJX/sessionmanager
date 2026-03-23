@@ -186,6 +186,7 @@ async function init(): Promise<void> {
   tray = createTrayIcon()
 
   sessionManager.setWindow(win)
+  sessionManager.setShowWindow(() => showWindow())
   sessionManager.start()
 
   registerIpcHandlers(win)

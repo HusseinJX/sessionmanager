@@ -32,6 +32,9 @@ declare global {
       onInputWaiting: (
         callback: (event: { id: string }) => void
       ) => () => void
+      onFocusSession: (
+        callback: (event: { id: string }) => void
+      ) => () => void
       getStoreState: () => Promise<{
         projects: Project[]
         settings: {
@@ -176,10 +179,15 @@ export default function App(): React.ReactElement {
       }
     })
 
+    const removeFocusSession = window.api.onFocusSession(({ id }) => {
+      setExpandedSession(id)
+    })
+
     return () => {
       removeOutput()
       removeExit()
       removeInputWaiting()
+      removeFocusSession()
     }
   }, [appendPreviewLine, updateSessionStatus, setInputWaiting])
 

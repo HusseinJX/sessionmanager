@@ -94,9 +94,14 @@ export class SessionManager extends EventEmitter {
   private sessions = new Map<string, PtySession>()
   private win: BrowserWindow | null = null
   private batchInterval: NodeJS.Timeout | null = null
+  private showWindowFn: (() => void) | null = null
 
   setWindow(win: BrowserWindow): void {
     this.win = win
+  }
+
+  setShowWindow(fn: () => void): void {
+    this.showWindowFn = fn
   }
 
   start(): void {
@@ -190,11 +195,18 @@ export class SessionManager extends EventEmitter {
         }
         // Only fire OS notification when the window is hidden — in-app sound handles the visible case
         if (!this.win?.isVisible() && Notification.isSupported()) {
-          new Notification({
+          const notification = new Notification({
             title: `${session.meta.name} is waiting`,
             body: 'A terminal needs your input.',
             silent: false
-          }).show()
+          })
+          notification.on('click', () => {
+            this.showWindowFn?.()
+            if (this.win && !this.win.isDestroyed()) {
+              this.win.webContents.send('terminal:focus-session', { id: meta.id })
+            }
+          })
+          notification.show()
         }
         this.emit('input-waiting', meta.id)
       }
