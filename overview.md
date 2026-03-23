@@ -254,3 +254,13 @@ Three-part change to notification behavior:
 3. **Red visual alerts** — `inputWaiting` state is now red throughout instead of yellow:
    - `TerminalCard.tsx`: red border with glow, pinging red dot, "needs input" label (bold)
    - `ProjectTabs.tsx`: pinging red dot badge on any project tab that has a waiting session — allows user to identify the right project at a glance
+
+---
+
+## Checkpoint 7 — Fix input-waiting detection and audio playback
+
+Two bugs fixed:
+
+1. **Pattern detection broken for generic prompts** — `PROMPT_PATTERNS` didn't cover prompts like `First Prompt: ` (ends with `: `). Added `/:s*$/` and `/\?\s*$/` patterns. Also, raw PTY output contains ANSI escape sequences that break `$` anchors — `detectInputWaiting` now strips ANSI before matching (using the existing `stripAnsiForExport` helper).
+
+2. **Audio silently failing** — Chromium starts `AudioContext` in `suspended` state due to autoplay policy. Fixed by calling `ctx.resume().then(play)` when suspended before scheduling oscillators.

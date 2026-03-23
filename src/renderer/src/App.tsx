@@ -75,23 +75,29 @@ declare global {
 function playAlertChime(): void {
   try {
     const ctx = new AudioContext()
-    const now = ctx.currentTime
-    const gain = ctx.createGain()
-    gain.connect(ctx.destination)
-    gain.gain.setValueAtTime(0.25, now)
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.55)
-
-    // Two quick tones — low then high
-    for (const [freq, start, end] of [
-      [660, now, now + 0.18],
-      [880, now + 0.2, now + 0.55]
-    ] as [number, number, number][]) {
-      const osc = ctx.createOscillator()
-      osc.type = 'sine'
-      osc.frequency.setValueAtTime(freq, start)
-      osc.connect(gain)
-      osc.start(start)
-      osc.stop(end)
+    const play = (): void => {
+      const now = ctx.currentTime
+      const gain = ctx.createGain()
+      gain.connect(ctx.destination)
+      gain.gain.setValueAtTime(0.25, now)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.55)
+      for (const [freq, start, end] of [
+        [660, now, now + 0.18],
+        [880, now + 0.2, now + 0.55]
+      ] as [number, number, number][]) {
+        const osc = ctx.createOscillator()
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(freq, start)
+        osc.connect(gain)
+        osc.start(start)
+        osc.stop(end)
+      }
+    }
+    // Chromium starts AudioContext suspended until resumed
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(play).catch(() => {})
+    } else {
+      play()
     }
   } catch {
     // AudioContext unavailable — skip silently

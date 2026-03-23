@@ -46,16 +46,21 @@ interface PtySession {
 
 // Heuristic: common shell prompt patterns to detect input waiting
 const PROMPT_PATTERNS = [
-  /[$#%>]\s*$/,
-  />>>\s*$/,
-  /\.\.\.\s*$/,
+  /[$#%>]\s*$/,           // shell prompts
+  />>>\s*$/,              // Python / REPL
+  /\.\.\.\s*$/,           // continuation prompt
   /\(y\/n\)\s*[?:]?\s*$/i,
   /password[:\s]*$/i,
-  /enter\s+passphrase/i
+  /enter\s+passphrase/i,
+  /:\s*$/,                // generic "Label:" prompts (e.g. "First Prompt: ")
+  /\?\s*$/,               // question prompts
 ]
 
 function detectInputWaiting(output: string): boolean {
-  const lastLine = output.split('\n').pop() || ''
+  // Strip ANSI before matching — raw PTY output contains escape sequences
+  // that break end-of-line regex anchors
+  const stripped = stripAnsiForExport(output)
+  const lastLine = stripped.split(/\r?\n/).filter((l) => l.trim()).pop() || ''
   return PROMPT_PATTERNS.some((p) => p.test(lastLine))
 }
 
