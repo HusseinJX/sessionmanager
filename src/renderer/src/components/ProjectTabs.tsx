@@ -10,8 +10,28 @@ export default function ProjectTabs(): React.ReactElement {
     setShowAddProjectModal,
     setShowAddSessionModal,
     removeProject,
-    renameProject
+    renameProject,
+    addSessionToProject,
+    initSessionState,
+    getSessionsForActiveProject
   } = useAppStore()
+
+  const handleAddSession = (): void => {
+    const project = projects.find((p) => p.id === activeProjectId)
+    if (!project) return
+    const sessions = getSessionsForActiveProject()
+    const lastCwd = sessions.at(-1)?.cwd
+    if (lastCwd) {
+      const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
+      window.api.addSessionToStore(project.id, { name, cwd: lastCwd }).then((stored) => {
+        addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd })
+        initSessionState(stored.id, project.id)
+        return window.api.createTerminal({ id: stored.id, name, cwd: lastCwd, projectId: project.id })
+      }).catch((err) => console.error('Failed to create session:', err))
+    } else {
+      setShowAddSessionModal(true)
+    }
+  }
 
   const projectHasWaiting = (projectId: string): boolean =>
     Object.values(sessionStates).some((s) => s.projectId === projectId && s.inputWaiting)
@@ -126,7 +146,7 @@ export default function ProjectTabs(): React.ReactElement {
       {activeProjectId && (
         <button
           className="px-3 py-2 text-text-muted hover:text-accent-green text-sm transition-colors mr-1"
-          onClick={() => setShowAddSessionModal(true)}
+          onClick={handleAddSession}
           title="Add terminal session"
         >
           + Terminal

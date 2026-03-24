@@ -2,6 +2,19 @@ import React from 'react'
 import { useAppStore } from '../store'
 import TerminalCard from './TerminalCard'
 
+async function addQuickSession(projectId: string, cwd: string): Promise<void> {
+  const { addSessionToProject, initSessionState } = useAppStore.getState()
+  const name = cwd !== '~' ? cwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
+  try {
+    const stored = await window.api.addSessionToStore(projectId, { name, cwd })
+    addSessionToProject(projectId, { id: stored.id, name, cwd })
+    initSessionState(stored.id, projectId)
+    await window.api.createTerminal({ id: stored.id, name, cwd, projectId })
+  } catch (err) {
+    console.error('Failed to create session:', err)
+  }
+}
+
 function getGridTemplate(layoutMode: string): string {
   switch (layoutMode) {
     case '1': return 'repeat(1, 1fr)'
@@ -13,6 +26,18 @@ function getGridTemplate(layoutMode: string): string {
 
 export default function TerminalGrid(): React.ReactElement {
   const { getActiveProject, getSessionsForActiveProject, setShowAddSessionModal, settings } = useAppStore()
+
+  const handleAdd = (): void => {
+    const project = getActiveProject()
+    if (!project) return
+    const sessions = getSessionsForActiveProject()
+    const lastCwd = sessions.at(-1)?.cwd
+    if (lastCwd) {
+      addQuickSession(project.id, lastCwd)
+    } else {
+      setShowAddSessionModal(true)
+    }
+  }
 
   const project = getActiveProject()
   const sessions = getSessionsForActiveProject()
@@ -65,7 +90,7 @@ export default function TerminalGrid(): React.ReactElement {
             text-text-muted hover:text-text-primary hover:border-border-subtle
             transition-colors min-h-[160px] cursor-pointer
           "
-          onClick={() => setShowAddSessionModal(true)}
+          onClick={handleAdd}
         >
           <span className="text-2xl opacity-50">+</span>
           <span className="text-xs">New Terminal</span>

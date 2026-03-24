@@ -328,3 +328,11 @@ Created a standalone React+Vite web dashboard at `web/` that connects to the ses
 When opening the "New Terminal" modal (via the + button in the grid or the bottom button), the working directory field is now pre-populated with the `cwd` of the most recently added session in the current project. No folder selection needed when adding a second terminal to the same project. The browse button remains available to change it. Falls back to empty (home) when the project has no sessions yet.
 
 **File changed:** `src/renderer/src/components/AddSessionModal.tsx`
+
+---
+
+## Checkpoint 13 — New terminal buttons create instantly (no modal)
+
+The "+ New Terminal" card in the grid and the "+ Terminal" button in the project tabs bar now create a new session immediately without showing the modal — same behavior as the fork (＋) button on individual terminal cards. Uses the last session's `cwd` in the active project. Falls back to the modal only when the project has no sessions yet (first terminal in a project still needs a folder selection).
+
+**Files changed:** `src/renderer/src/components/TerminalGrid.tsx`, `src/renderer/src/components/ProjectTabs.tsx`
