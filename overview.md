@@ -278,3 +278,26 @@ Fix: removed shell prompt patterns and `...` from `PROMPT_PATTERNS`. Only genuin
 ## Checkpoint 9 — Notification click opens the waiting terminal in expanded view
 
 Added `setShowWindow(fn)` to `SessionManager` so the notification click handler can call `showWindow()` (which positions the tray popup correctly) without a circular dependency. On click: shows the window, then sends `terminal:focus-session` IPC to the renderer. Renderer subscribes in `App.tsx` and calls `setExpandedSession(id)` to open that terminal full-screen.
+
+---
+
+## Checkpoint 10 — Web UI companion (`web/`)
+
+Created a standalone React+Vite web dashboard at `web/` that connects to the session manager's existing HTTP API server. Intended for deployment on a separate host (e.g. open in browser while session manager runs on a VM).
+
+**Architecture:**
+- `web/` is an independent Vite+React+TypeScript+Tailwind app — built to `web/dist/` as static files
+- Connects to the existing HTTP API (`/api/status`, `/api/sessions/:id/logs`, `/api/sessions/:id/command`, `/api/events` SSE)
+- Auth via the existing Bearer token — stored in `localStorage`, passed as `?token=` query param for SSE (already supported by the server)
+- No changes needed to the Electron app
+
+**UI features:**
+- Connection setup screen (URL + token, validates on submit)
+- Sessions grouped by project, each project collapsible
+- Per-session card: status badge, last ~20 log lines (auto-scrolling), send-command input
+- Live updates via SSE: output streamed to log area, session status changes, input-waiting indicator (⚡)
+- Optimistic clearing of waiting state on command send
+- Error/reconnect banner on SSE drop
+
+**Dev:** `cd web && npm run dev` → Vite dev server on :5173
+**Build:** `npm run build` → static files in `web/dist/` ready to deploy (Nginx, Caddy, etc.)
