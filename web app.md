@@ -4,11 +4,19 @@ A browser-based dashboard for Session Manager. Runs separately from the Electron
 
 ## What it does
 
-- Shows all active sessions grouped by project
+- Shows all active sessions grouped by project, each project collapsible
 - Streams live terminal output per session (last ~20 lines on load, then live via SSE)
-- Lets you send commands to any session from the browser
+- Click ⤢ on any session card to open an expanded full-screen terminal view
+- Lets you send commands to any session from the browser (card view or expanded view)
 - Highlights sessions that are waiting for input (⚡)
 - Works remotely — open it in a browser while Session Manager runs on a VM or another machine
+
+## Ports
+
+| Service | Port |
+|---------|------|
+| Web UI (Vite dev server) | **5175** |
+| Session Manager API server | **7543** |
 
 ## How to run (dev)
 
@@ -16,11 +24,11 @@ A browser-based dashboard for Session Manager. Runs separately from the Electron
 cd web
 npm install
 npm run dev
-# → http://localhost:5173
+# → http://localhost:5175
 ```
 
 On first load, enter:
-- **Server URL** — the machine running Session Manager, e.g. `http://192.168.1.50:7543`
+- **Server URL** — `http://localhost:7543` (or the remote machine's address)
 - **Token** — found in Session Manager → Settings → HTTP Server
 
 Config is saved to `localStorage` so you only enter it once.
@@ -73,11 +81,12 @@ web/
 │   ├── index.css             Tailwind directives + scrollbar styling
 │   └── components/
 │       ├── ConnectionSetup   URL + token form (validates against /api/status)
-│       ├── Dashboard         Header with live/disconnected badge, project list
+│       ├── Dashboard         Header, project list, expanded session overlay
 │       ├── ProjectGroup      Collapsible section per project
-│       └── SessionCard       Log area + command input per session
+│       ├── SessionCard       Compact log area + command input + expand button
+│       └── ExpandedSession   Full-screen modal with larger log view + command input
 ├── index.html
-├── vite.config.ts
+├── vite.config.ts            port: 5175, strictPort: true
 ├── tailwind.config.js
 ├── tsconfig.json
 └── package.json

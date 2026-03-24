@@ -7,9 +7,10 @@ interface Props {
   logs: Record<string, string[]>
   config: ServerConfig
   onSessionUpdate: (id: string, changes: Partial<SessionStatus>) => void
+  onExpand: (id: string) => void
 }
 
-export default function ProjectGroup({ project, logs, config, onSessionUpdate }: Props) {
+export default function ProjectGroup({ project, logs, config, onSessionUpdate, onExpand }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const waitingCount = project.sessions.filter((s) => s.inputWaiting).length
 
@@ -51,6 +52,7 @@ export default function ProjectGroup({ project, logs, config, onSessionUpdate }:
               logs={logs[session.id] ?? []}
               config={config}
               onSessionUpdate={onSessionUpdate}
+              onExpand={onExpand}
             />
           ))}
         </div>

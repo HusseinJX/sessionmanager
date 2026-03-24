@@ -1,5 +1,7 @@
+import { useState, useCallback } from 'react'
 import type { Project, SessionStatus, ServerConfig } from '../types'
 import ProjectGroup from './ProjectGroup'
+import ExpandedSession from './ExpandedSession'
 
 interface Props {
   projects: Project[]
@@ -20,11 +22,21 @@ export default function Dashboard({
   onDisconnect,
   onSessionUpdate,
 }: Props) {
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  const handleExpand = useCallback((id: string) => setExpandedId(id), [])
+  const handleClose = useCallback(() => setExpandedId(null), [])
+
   const totalSessions = projects.reduce((n, p) => n + p.sessions.length, 0)
   const waitingCount = projects.reduce(
     (n, p) => n + p.sessions.filter((s) => s.inputWaiting).length,
     0
   )
+
+  // Find expanded session + its logs
+  const expandedSession = expandedId
+    ? projects.flatMap((p) => p.sessions).find((s) => s.id === expandedId) ?? null
+    : null
 
   return (
     <div className="min-h-screen" style={{ background: '#0d1117' }}>
@@ -105,10 +117,22 @@ export default function Dashboard({
               logs={logs}
               config={config}
               onSessionUpdate={onSessionUpdate}
+              onExpand={handleExpand}
             />
           ))
         )}
       </main>
+
+      {/* Expanded session overlay */}
+      {expandedSession && (
+        <ExpandedSession
+          session={expandedSession}
+          logs={logs[expandedSession.id] ?? []}
+          config={config}
+          onClose={handleClose}
+          onSessionUpdate={onSessionUpdate}
+        />
+      )}
     </div>
   )
 }

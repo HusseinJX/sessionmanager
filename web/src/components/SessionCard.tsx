@@ -7,9 +7,10 @@ interface Props {
   logs: string[]
   config: ServerConfig
   onSessionUpdate: (id: string, changes: Partial<SessionStatus>) => void
+  onExpand: (id: string) => void
 }
 
-export default function SessionCard({ session, logs, config, onSessionUpdate }: Props) {
+export default function SessionCard({ session, logs, config, onSessionUpdate, onExpand }: Props) {
   const [command, setCommand] = useState('')
   const [sending, setSending] = useState(false)
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null)
@@ -97,11 +98,19 @@ export default function SessionCard({ session, logs, config, onSessionUpdate }: 
             {session.cwd}
           </div>
         </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
           <span className="w-1.5 h-1.5 rounded-full" style={{ background: statusColor }} />
           <span className="text-xs" style={{ color: statusColor }}>
             {statusLabel}
           </span>
+          <button
+            onClick={() => onExpand(session.id)}
+            className="text-gray-600 hover:text-gray-300 transition-colors leading-none"
+            title="Expand"
+            style={{ fontSize: '0.8rem' }}
+          >
+            ⤢
+          </button>
         </div>
       </div>
 
