@@ -35,6 +35,8 @@ export interface AppSettings {
   serverPort: number
   serverToken: string
   serverEnabled: boolean
+  windowMode: boolean
+  layoutMode: string
 }
 
 interface AppState {
@@ -113,7 +115,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     hotkey: 'CommandOrControl+Shift+T',
     serverPort: 7543,
     serverToken: '',
-    serverEnabled: true
+    serverEnabled: true,
+    windowMode: false,
+    layoutMode: 'auto'
   },
 
   setProjects: (projects) => set({ projects }),

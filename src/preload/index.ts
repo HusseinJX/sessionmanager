@@ -145,5 +145,19 @@ contextBridge.exposeInMainWorld('api', {
     port: number
     token: string
     url: string
-  }> => ipcRenderer.invoke('server:info')
+  }> => ipcRenderer.invoke('server:info'),
+
+  // ─── Window controls ─────────────────────────────────────────────────────
+
+  setWindowMode: (enabled: boolean): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:set-mode', { enabled }),
+
+  minimizeWindow: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:minimize'),
+
+  maximizeWindow: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:maximize'),
+
+  closeWindow: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:close')
 })

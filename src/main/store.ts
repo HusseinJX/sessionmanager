@@ -27,6 +27,8 @@ export interface AppSettings {
   serverPort: number
   serverToken: string
   serverEnabled: boolean
+  windowMode: boolean
+  layoutMode: string
 }
 
 export interface StoreSchema {
@@ -70,7 +72,9 @@ const schema = {
       hotkey: 'CommandOrControl+Shift+T',
       serverPort: 7543,
       serverToken: '',
-      serverEnabled: true
+      serverEnabled: true,
+      windowMode: false,
+      layoutMode: 'auto'
     } as AppSettings,
     properties: {
       theme: { type: 'string', default: 'dark' },
@@ -80,7 +84,9 @@ const schema = {
       hotkey: { type: 'string', default: 'CommandOrControl+Shift+T' },
       serverPort: { type: 'number', default: 7543 },
       serverToken: { type: 'string', default: '' },
-      serverEnabled: { type: 'boolean', default: true }
+      serverEnabled: { type: 'boolean', default: true },
+      windowMode: { type: 'boolean', default: false },
+      layoutMode: { type: 'string', default: 'auto' }
     }
   }
 }
@@ -105,7 +111,9 @@ export function getSettings(): AppSettings {
     hotkey: 'CommandOrControl+Shift+T',
     serverPort: 7543,
     serverToken: '',
-    serverEnabled: true
+    serverEnabled: true,
+    windowMode: false,
+    layoutMode: 'auto'
   })
 }
 

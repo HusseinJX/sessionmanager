@@ -14,9 +14,14 @@ let httpServer: HttpApiServer | null = null
 
 const isDev = !app.isPackaged
 
-// macOS: hide from Dock before app is ready
+// Read persisted window mode before app is ready (electron-store is sync)
+let windowMode: boolean = getSettings().windowMode ?? false
+
+// macOS: hide from Dock unless window mode is active
 if (process.platform === 'darwin') {
-  app.dock.hide()
+  if (!windowMode) {
+    app.dock.hide()
+  }
 }
 
 function createTrayIcon(): Tray {
@@ -115,9 +120,35 @@ function positionWindowAtTray(): void {
 
 function showWindow(): void {
   if (!win) return
-  positionWindowAtTray()
+  if (!windowMode) {
+    positionWindowAtTray()
+  }
   win.show()
   win.focus()
+}
+
+function applyWindowMode(enabled: boolean): void {
+  if (!win) return
+  windowMode = enabled
+  setSettings({ windowMode: enabled })
+
+  if (enabled) {
+    win.setSkipTaskbar(false)
+    if (process.platform === 'darwin') {
+      app.setActivationPolicy('regular')
+      app.dock.show()
+    }
+    // Move window to center of screen when entering window mode
+    win.center()
+    win.show()
+    win.focus()
+  } else {
+    win.setSkipTaskbar(true)
+    if (process.platform === 'darwin') {
+      app.setActivationPolicy('accessory')
+      app.dock.hide()
+    }
+  }
 }
 
 function createWindow(): BrowserWindow {
@@ -129,7 +160,7 @@ function createWindow(): BrowserWindow {
     show: false,
     frame: false,
     resizable: true,
-    skipTaskbar: true,
+    skipTaskbar: !windowMode,
     alwaysOnTop: false,
     vibrancy: process.platform === 'darwin' ? 'sidebar' : undefined,
     webPreferences: {
@@ -144,11 +175,9 @@ function createWindow(): BrowserWindow {
     w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }
 
-  // Hide on blur (standard menubar behavior)
+  // Hide on blur (standard menubar behavior) — only in tray mode
   w.on('blur', () => {
-    // Only auto-hide when it's acting as a tray popup
-    // Don't hide if window is being resized or user is in devtools
-    if (!isDev) {
+    if (!isDev && !windowMode) {
       w.hide()
     }
   })
@@ -177,9 +206,9 @@ function createWindow(): BrowserWindow {
 }
 
 async function init(): Promise<void> {
-  // macOS: accessory activation policy = menubar only (no Dock, no Cmd+Tab)
+  // macOS: accessory = menubar only; regular = Dock + Cmd+Tab
   if (process.platform === 'darwin') {
-    app.setActivationPolicy('accessory')
+    app.setActivationPolicy(windowMode ? 'regular' : 'accessory')
   }
 
   win = createWindow()
@@ -230,6 +259,33 @@ async function init(): Promise<void> {
     } catch (err) {
       return { ok: false, error: String(err) }
     }
+  })
+
+  // Window mode + controls
+  ipcMain.handle('window:set-mode', async (_, { enabled }: { enabled: boolean }) => {
+    applyWindowMode(enabled)
+    return { ok: true }
+  })
+
+  ipcMain.handle('window:minimize', async () => {
+    win?.minimize()
+    return { ok: true }
+  })
+
+  ipcMain.handle('window:maximize', async () => {
+    if (win?.isMaximized()) {
+      win.unmaximize()
+    } else {
+      win?.maximize()
+    }
+    return { ok: true }
+  })
+
+  ipcMain.handle('window:close', async () => {
+    // In window mode "close" returns to tray mode
+    applyWindowMode(false)
+    win?.hide()
+    return { ok: true }
   })
 
   // HTTP API server

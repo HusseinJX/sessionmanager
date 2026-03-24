@@ -2,11 +2,14 @@ import React, { useState, useRef, useEffect } from 'react'
 import { useAppStore } from '../store'
 
 export default function AddSessionModal(): React.ReactElement {
-  const { setShowAddSessionModal, activeProjectId, addSessionToProject, initSessionState } =
+  const { setShowAddSessionModal, activeProjectId, addSessionToProject, initSessionState, getSessionsForActiveProject } =
     useAppStore()
 
+  // Default cwd to the last session's folder in this project
+  const lastCwd = getSessionsForActiveProject().at(-1)?.cwd ?? ''
+
   const [name, setName] = useState('')
-  const [cwd, setCwd] = useState('')
+  const [cwd, setCwd] = useState(lastCwd)
   const [command, setCommand] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -103,7 +106,7 @@ export default function AddSessionModal(): React.ReactElement {
                 type="text"
                 value={cwd}
                 onChange={(e) => setCwd(e.target.value)}
-                placeholder="~/projects/myapp  (default: home)"
+                placeholder={lastCwd || '~/projects/myapp  (default: home)'}
                 className="flex-1 bg-bg-overlay border border-border-subtle rounded px-3 py-2 text-sm text-text-primary placeholder-text-muted font-mono outline-none focus:border-accent-blue transition-colors"
               />
               <button

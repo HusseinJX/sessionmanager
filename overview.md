@@ -301,3 +301,30 @@ Created a standalone React+Vite web dashboard at `web/` that connects to the ses
 
 **Dev:** `cd web && npm run dev` → Vite dev server on :5173
 **Build:** `npm run build` → static files in `web/dist/` ready to deploy (Nginx, Caddy, etc.)
+
+---
+
+## Checkpoint 11 — Window mode + vertical layout columns
+
+### Window Mode
+- New `windowMode: boolean` setting (persisted to electron-store)
+- Toggle button in title bar: `⧉` enters window mode, `⊟` returns to tray mode
+- In window mode: no auto-hide on blur, shown in taskbar/Dock, macOS activation policy changes to `regular` (Cmd+Tab visible), window centers on screen when first activated
+- Title bar shows macOS-style traffic-light buttons (red=back to tray, yellow=minimize, green=maximize)
+- `closeWindow` IPC returns to tray mode and hides rather than quitting
+
+### Layout / Vertical Split
+- New `layoutMode: string` setting ('auto' | '1' | '2' | '3')
+- Layout toggle button in title bar cycles: auto → 1 → 2 → 3 → auto
+- Icons: `⊞` auto, `▬` 1-col, `⊟` 2-col, `⊠` 3-col
+- `TerminalGrid` applies `gridTemplateColumns` based on mode: auto-fill (responsive) or 1/2/3 equal columns
+
+**Files changed:** `src/main/store.ts`, `src/main/index.ts`, `src/preload/index.ts`, `src/renderer/src/store/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/components/TerminalGrid.tsx`
+
+---
+
+## Checkpoint 12 — New terminal inherits last folder in project
+
+When opening the "New Terminal" modal (via the + button in the grid or the bottom button), the working directory field is now pre-populated with the `cwd` of the most recently added session in the current project. No folder selection needed when adding a second terminal to the same project. The browse button remains available to change it. Falls back to empty (home) when the project has no sessions yet.
+
+**File changed:** `src/renderer/src/components/AddSessionModal.tsx`

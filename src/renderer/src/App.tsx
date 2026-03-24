@@ -74,6 +74,10 @@ declare global {
         token: string
         url: string
       }>
+      setWindowMode: (enabled: boolean) => Promise<{ ok: boolean }>
+      minimizeWindow: () => Promise<{ ok: boolean }>
+      maximizeWindow: () => Promise<{ ok: boolean }>
+      closeWindow: () => Promise<{ ok: boolean }>
     }
   }
 }
@@ -126,7 +130,8 @@ export default function App(): React.ReactElement {
     updateSessionStatus,
     setInputWaiting,
     appendPreviewLine,
-    setSettings
+    setSettings,
+    settings
   } = useAppStore()
 
   // Load initial state from main process and restart all pty processes
@@ -216,22 +221,78 @@ export default function App(): React.ReactElement {
     <div className="flex flex-col h-screen bg-bg-base text-text-primary overflow-hidden">
       {/* Title bar drag region */}
       <div
-        className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border-subtle"
+        className="flex items-center justify-between px-3 py-2 bg-bg-card border-b border-border-subtle"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-text-primary select-none">
+        {/* Left side: window controls (window mode) or app name (tray mode) */}
+        <div
+          className="flex items-center gap-1.5"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          {settings.windowMode ? (
+            <>
+              {/* macOS-style window control buttons */}
+              <button
+                className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 transition-colors flex items-center justify-center group"
+                onClick={() => window.api.closeWindow()}
+                title="Back to tray"
+              >
+                <span className="hidden group-hover:block text-[7px] text-red-900 font-bold leading-none">×</span>
+              </button>
+              <button
+                className="w-3 h-3 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors flex items-center justify-center group"
+                onClick={() => window.api.minimizeWindow()}
+                title="Minimize"
+              >
+                <span className="hidden group-hover:block text-[7px] text-yellow-800 font-bold leading-none">–</span>
+              </button>
+              <button
+                className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-400 transition-colors flex items-center justify-center group"
+                onClick={() => window.api.maximizeWindow()}
+                title="Maximize"
+              >
+                <span className="hidden group-hover:block text-[7px] text-green-900 font-bold leading-none">+</span>
+              </button>
+            </>
+          ) : (
+            <span className="text-sm font-semibold text-text-primary select-none pl-1">
+              SessionManager
+            </span>
+          )}
+        </div>
+
+        {/* Center: app name in window mode */}
+        {settings.windowMode && (
+          <span className="text-sm font-semibold text-text-primary select-none absolute left-1/2 -translate-x-1/2">
             SessionManager
           </span>
-        </div>
+        )}
+
+        {/* Right side: toolbar buttons */}
         <div
           className="flex items-center gap-1"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
+          {/* Layout toggle */}
+          <LayoutToggle />
+
+          {/* Window mode toggle */}
+          <button
+            className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors"
+            onClick={() => {
+              const next = !settings.windowMode
+              setSettings({ windowMode: next })
+              window.api.setWindowMode(next)
+            }}
+            title={settings.windowMode ? 'Back to tray mode' : 'Open as window'}
+          >
+            {settings.windowMode ? '⊟' : '⧉'}
+          </button>
+
           <button
             className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors"
             onClick={() => useAppStore.getState().setShowConfigPanel(true)}
-            title="Export / Import config"
+            title="Settings"
           >
             ⚙
           </button>
@@ -260,6 +321,37 @@ export default function App(): React.ReactElement {
       {showAddProjectModal && <AddProjectModal />}
       {showConfigPanel && <ConfigPanel />}
     </div>
+  )
+}
+
+const LAYOUT_MODES = ['auto', '1', '2', '3'] as const
+const LAYOUT_LABELS: Record<string, string> = { auto: '⊞', '1': '▬', '2': '⊟', '3': '⊠' }
+const LAYOUT_TITLES: Record<string, string> = {
+  auto: 'Auto grid',
+  '1': '1 column',
+  '2': '2 columns',
+  '3': '3 columns'
+}
+
+function LayoutToggle(): React.ReactElement {
+  const { settings, setSettings } = useAppStore()
+  const current = settings.layoutMode || 'auto'
+
+  const cycle = (): void => {
+    const idx = LAYOUT_MODES.indexOf(current as (typeof LAYOUT_MODES)[number])
+    const next = LAYOUT_MODES[(idx + 1) % LAYOUT_MODES.length]
+    setSettings({ layoutMode: next })
+    window.api.setSettings({ layoutMode: next })
+  }
+
+  return (
+    <button
+      className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors font-mono"
+      onClick={cycle}
+      title={`Layout: ${LAYOUT_TITLES[current]} (click to cycle)`}
+    >
+      {LAYOUT_LABELS[current] || '⊞'}
+    </button>
   )
 }
 
