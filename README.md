@@ -24,17 +24,44 @@ A cross-platform Electron app that shows multiple terminal sessions in a card gr
 ## Setup
 
 ```bash
-# Install dependencies (automatically rebuilds node-pty for Electron)
+# Install root dependencies (automatically rebuilds node-pty for Electron)
 npm install
 
-# Start in development mode
+# Install web dashboard dependencies
+cd web && npm install && cd ..
+```
+
+## Running
+
+### Everything at once (recommended)
+
+```bash
+npm run dev:all
+```
+
+Starts the Electron app and the web dashboard side-by-side in the same terminal with labeled, color-coded output. Ctrl+C kills both.
+
+### Individually
+
+```bash
+# Electron desktop app
 npm run dev
 
-# Build for production
-npm run build
+# Web dashboard (separate terminal)
+npm run dev:web
+```
 
-# Package into a distributable
-npm run dist
+- Electron renderer: `http://localhost:5173`
+- Web dashboard: `http://localhost:5175`
+- API server: `http://127.0.0.1:7543`
+
+To connect the web dashboard, open `http://localhost:5175`, enter `http://127.0.0.1:7543` as the server URL, and paste the token from the app's Settings panel (⚙ → API server → Copy).
+
+### Production build
+
+```bash
+npm run build   # compile
+npm run dist    # package into distributable (dmg / AppImage / exe)
 ```
 
 ## Architecture
