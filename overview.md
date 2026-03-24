@@ -336,3 +336,11 @@ When opening the "New Terminal" modal (via the + button in the grid or the botto
 The "+ New Terminal" card in the grid and the "+ Terminal" button in the project tabs bar now create a new session immediately without showing the modal — same behavior as the fork (＋) button on individual terminal cards. Uses the last session's `cwd` in the active project. Falls back to the modal only when the project has no sessions yet (first terminal in a project still needs a folder selection).
 
 **Files changed:** `src/renderer/src/components/TerminalGrid.tsx`, `src/renderer/src/components/ProjectTabs.tsx`
+
+---
+
+## Checkpoint 14 — dev:all script + README running instructions
+
+Added `npm run dev:all` which uses `concurrently` to start both the Electron app and the web dashboard in one command with labeled, color-coded output (Ctrl+C kills both). Also added `npm run dev:web` shortcut. README now has a clear **Running** section with ports, connection steps for the web dashboard, and build/dist instructions.
+
+**Files changed:** `package.json`, `README.md`
