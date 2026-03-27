@@ -26,6 +26,7 @@ export interface SessionStatus {
   id: string
   name: string
   cwd: string
+  currentCwd?: string
   command?: string
   projectId: string
   projectName?: string
@@ -44,6 +45,7 @@ interface PtySession {
   lastOutputTime: number
   activityBytes: number  // bytes received since last idle-fire or writeToSession
   hadInput: boolean      // true after first real input (user or launch command)
+  currentCwd?: string    // live cwd from OSC 7 sequences
 }
 
 // Idle-based input-waiting detection: if a running session receives >= this
@@ -195,7 +197,9 @@ export class SessionManager extends EventEmitter {
       ...process.env,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
-      LANG: process.env.LANG || 'en_US.UTF-8'
+      LANG: process.env.LANG || 'en_US.UTF-8',
+      // Signals zsh to emit OSC 7 (cwd notifications) on every prompt
+      TERM_PROGRAM: 'iTerm.app'
     }
 
     const pty = nodePty.spawn(shell, args, {
@@ -232,6 +236,22 @@ export class SessionManager extends EventEmitter {
       }
 
       this.emit('output', meta.id, data)
+
+      // OSC 7 — cwd notification: \e]7;file://hostname/path\a (or \e\ ST terminator)
+      // zsh emits this automatically when TERM_PROGRAM=iTerm.app is set
+      const osc7 = data.match(/\x1b\]7;file:\/\/([^\x07\x1b]*)(?:\x07|\x1b\\)/)
+      if (osc7) {
+        try {
+          const newCwd = decodeURIComponent(new URL('file://' + osc7[1]).pathname)
+          if (newCwd && newCwd !== session.currentCwd) {
+            session.currentCwd = newCwd
+            if (this.win && !this.win.isDestroyed()) {
+              this.win.webContents.send('terminal:cwd', { id: meta.id, cwd: newCwd })
+            }
+            this.emit('cwd', meta.id, newCwd)
+          }
+        } catch { /* malformed URL — ignore */ }
+      }
 
       // Fast-path pattern detection (passwords, y/n, etc.)
       const recent = session.outputBuffer.slice(-5).join('')
@@ -330,6 +350,7 @@ export class SessionManager extends EventEmitter {
         id,
         name: session.meta.name,
         cwd: session.meta.cwd,
+        currentCwd: session.currentCwd,
         command: session.meta.command,
         projectId: session.meta.projectId,
         projectName: session.meta.projectName,

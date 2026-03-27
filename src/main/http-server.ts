@@ -61,6 +61,9 @@ export class HttpApiServer {
     this.sessionManager.on('input-waiting', (sessionId: string) => {
       this.pushSse('input-waiting', { sessionId })
     })
+    this.sessionManager.on('cwd', (sessionId: string, cwd: string) => {
+      this.pushSse('cwd', { sessionId, cwd })
+    })
   }
 
   private pushSse(event: string, data: unknown): void {

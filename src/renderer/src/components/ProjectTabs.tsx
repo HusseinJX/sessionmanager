@@ -109,7 +109,16 @@ export default function ProjectTabs(): React.ReactElement {
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span className="text-sm">{project.name}</span>
+              <span className="text-sm flex items-center gap-1">
+                {project.name}
+                <button
+                  className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-text-muted hover:text-accent-blue text-xs leading-none px-0.5"
+                  title="Rename project (or double-click)"
+                  onClick={(e) => { e.stopPropagation(); handleRenameStart(project.id, project.name) }}
+                >
+                  ✎
+                </button>
+              </span>
             )}
             {projectHasWaiting(project.id) && (
               <span className="w-2 h-2 rounded-full bg-accent-red animate-ping flex-shrink-0" title="Terminal needs input" />

@@ -70,6 +70,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
   const status = runtimeState?.status ?? 'running'
   const inputWaiting = runtimeState?.inputWaiting ?? false
   const hasNewOutput = runtimeState?.hasNewOutput ?? false
+  const liveCwd = runtimeState?.currentCwd ?? session.cwd
 
   const handleRemove = async (e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
@@ -101,7 +102,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
     if (e.key === 'Enter') handleSend()
   }
 
-  const cwdDisplay = session.cwd
+  const cwdDisplay = liveCwd
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
 
@@ -156,7 +157,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
         className="px-3 pt-1.5 pb-1 cursor-pointer"
         onClick={() => setExpandedSession(session.id)}
       >
-        <span className="text-xs text-text-muted font-mono truncate block" title={session.cwd}>
+        <span className="text-xs text-text-muted font-mono truncate block" title={liveCwd}>
           {cwdDisplay}
         </span>
       </div>

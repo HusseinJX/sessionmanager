@@ -344,3 +344,29 @@ The "+ New Terminal" card in the grid and the "+ Terminal" button in the project
 Added `npm run dev:all` which uses `concurrently` to start both the Electron app and the web dashboard in one command with labeled, color-coded output (Ctrl+C kills both). Also added `npm run dev:web` shortcut. README now has a clear **Running** section with ports, connection steps for the web dashboard, and build/dist instructions.
 
 **Files changed:** `package.json`, `README.md`
+
+---
+
+## Checkpoint 15 — Rename projects discoverable + session sidebar in expanded view
+
+**Rename projects**: Already implemented via double-click on tab. Added a visible pencil (✎) icon that appears on hover next to the project name, making the feature discoverable without requiring knowledge of the double-click interaction. Both mechanisms work.
+
+**Expanded view sidebar**: `FullTerminal.tsx` now has a 176px left sidebar showing all sessions in the same project. Each sidebar item shows status dot, session name, and last 3 lines of preview output. Clicking switches the main terminal to that session. A `+ Terminal` button at the bottom of the sidebar creates a new session in the same folder and switches to it automatically. Active session is highlighted with a green left border. The xterm instance is disposed and recreated when switching sessions (`activeSessionId` local state drives the effect).
+
+**Files changed:** `src/renderer/src/components/FullTerminal.tsx`, `src/renderer/src/components/ProjectTabs.tsx`
+
+---
+
+## Checkpoint 16 — Live cwd tracking in terminal cards
+
+Terminal cards (grid view and expanded view) now show the **live current working directory** that updates as the user navigates with `cd`.
+
+**How it works:**
+- `TERM_PROGRAM=iTerm.app` is injected into every PTY session's environment. This causes zsh (macOS default shell) to automatically emit **OSC 7** sequences (`\e]7;file://hostname/path\a`) on every directory change.
+- `session-manager.ts` parses these sequences in `pty.onData`, decodes the URL-encoded path, and emits a `'cwd'` event.
+- Electron: the `'cwd'` event sends `terminal:cwd` IPC to the renderer, which updates `SessionRuntimeState.currentCwd` in the Zustand store. Cards display `currentCwd ?? session.cwd`.
+- Web UI: the `'cwd'` SSE event updates the session's `currentCwd` field; `SessionCard` shows `currentCwd ?? cwd`.
+
+Works out of the box for zsh. Bash users would need `PROMPT_COMMAND` configured manually (not injected).
+
+**Files changed:** `src/main/session-manager.ts`, `src/main/http-server.ts`, `src/preload/index.ts`, `src/renderer/src/store/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/components/TerminalCard.tsx`, `src/renderer/src/components/FullTerminal.tsx`, `web/src/types.ts`, `web/src/App.tsx`, `web/src/components/SessionCard.tsx`

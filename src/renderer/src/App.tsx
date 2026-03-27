@@ -38,6 +38,9 @@ declare global {
       onFocusSession: (
         callback: (event: { id: string }) => void
       ) => () => void
+      onCwd: (
+        callback: (event: { id: string; cwd: string }) => void
+      ) => () => void
       getStoreState: () => Promise<{
         projects: Project[]
         settings: {
@@ -129,6 +132,7 @@ export default function App(): React.ReactElement {
     initSessionState,
     updateSessionStatus,
     setInputWaiting,
+    updateSessionCwd,
     appendPreviewLine,
     setSettings,
     settings
@@ -195,14 +199,19 @@ export default function App(): React.ReactElement {
       setExpandedSession(id)
     })
 
+    const removeCwd = window.api.onCwd(({ id, cwd }) => {
+      updateSessionCwd(id, cwd)
+    })
+
     return () => {
       removeOutput()
       removeExit()
       removeInputWaiting()
       removeInputResolved()
       removeFocusSession()
+      removeCwd()
     }
-  }, [appendPreviewLine, updateSessionStatus, setInputWaiting])
+  }, [appendPreviewLine, updateSessionStatus, setInputWaiting, updateSessionCwd])
 
   // Keyboard handler for Escape to collapse
   useEffect(() => {

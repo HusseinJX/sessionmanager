@@ -94,8 +94,8 @@ export default function SessionCard({ session, logs, config, onSessionUpdate, on
               </span>
             )}
           </div>
-          <div className="text-xs text-gray-600 truncate mt-0.5" title={session.cwd}>
-            {session.cwd}
+          <div className="text-xs text-gray-600 truncate mt-0.5" title={session.currentCwd ?? session.cwd}>
+            {session.currentCwd ?? session.cwd}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">

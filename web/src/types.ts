@@ -2,6 +2,7 @@ export interface SessionStatus {
   id: string
   name: string
   cwd: string
+  currentCwd?: string
   command?: string
   projectId: string
   projectName?: string

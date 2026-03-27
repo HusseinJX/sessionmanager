@@ -24,6 +24,7 @@ export interface SessionRuntimeState {
   hasNewOutput: boolean
   lastViewedAt: number
   previewLines: string[]
+  currentCwd?: string
 }
 
 export interface AppSettings {
@@ -67,6 +68,7 @@ interface AppState {
   initSessionState: (sessionId: string, projectId: string) => void
   updateSessionStatus: (sessionId: string, status: 'running' | 'exited', exitCode?: number) => void
   setInputWaiting: (sessionId: string, waiting: boolean) => void
+  updateSessionCwd: (sessionId: string, cwd: string) => void
   appendPreviewLine: (sessionId: string, data: string) => void
   markSessionViewed: (sessionId: string) => void
   setSettings: (settings: Partial<AppSettings>) => void
@@ -222,6 +224,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
     })),
+
+  updateSessionCwd: (sessionId, cwd) =>
+    set((state) => {
+      const existing = state.sessionStates[sessionId]
+      if (!existing) return state
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [sessionId]: { ...existing, currentCwd: cwd }
+        }
+      }
+    }),
 
   appendPreviewLine: (sessionId, data) =>
     set((state) => {

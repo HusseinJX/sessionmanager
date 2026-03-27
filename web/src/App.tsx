@@ -154,6 +154,12 @@ export default function App() {
       updateSession(sessionId, { inputWaiting: true })
     })
 
+    es.addEventListener('cwd', (e: MessageEvent<string>) => {
+      if (!mounted) return
+      const { sessionId, cwd } = JSON.parse(e.data) as { sessionId: string; cwd: string }
+      updateSession(sessionId, { currentCwd: cwd })
+    })
+
     es.onerror = () => {
       if (mounted) {
         setConnected(false)
