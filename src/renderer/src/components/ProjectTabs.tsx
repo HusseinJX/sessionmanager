@@ -1,6 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useAppStore } from '../store'
 
+function ViewToggle({ projectId }: { projectId: string }): React.ReactElement {
+  const { getProjectViewMode, setProjectViewMode } = useAppStore()
+  const mode = getProjectViewMode(projectId)
+
+  return (
+    <div className="flex items-center bg-bg-overlay rounded overflow-hidden ml-2 border border-border-subtle">
+      <button
+        className={`px-2 py-1 text-xs transition-colors ${
+          mode === 'terminals'
+            ? 'bg-bg-card text-text-primary'
+            : 'text-text-muted hover:text-text-primary'
+        }`}
+        onClick={() => setProjectViewMode(projectId, 'terminals')}
+        title="Terminal sessions"
+      >
+        Terminals
+      </button>
+      <button
+        className={`px-2 py-1 text-xs transition-colors ${
+          mode === 'planner'
+            ? 'bg-bg-card text-text-primary'
+            : 'text-text-muted hover:text-text-primary'
+        }`}
+        onClick={() => setProjectViewMode(projectId, 'planner')}
+        title="Task planner board"
+      >
+        Planner
+      </button>
+    </div>
+  )
+}
+
 export default function ProjectTabs(): React.ReactElement {
   const {
     projects,
@@ -149,6 +181,9 @@ export default function ProjectTabs(): React.ReactElement {
       >
         + Project
       </button>
+
+      {/* View toggle */}
+      {activeProjectId && <ViewToggle projectId={activeProjectId} />}
 
       {/* Spacer + Add session button */}
       <div className="flex-1" />

@@ -6,6 +6,7 @@ import FullTerminal from './components/FullTerminal'
 import AddSessionModal from './components/AddSessionModal'
 import AddProjectModal from './components/AddProjectModal'
 import ConfigPanel from './components/ConfigPanel'
+import PlannerBoard from './components/PlannerBoard'
 import type { Project } from './store'
 
 declare global {
@@ -56,12 +57,26 @@ declare global {
       renameProject: (id: string, name: string) => Promise<{ ok: boolean }>
       addSessionToStore: (
         projectId: string,
-        session: { name: string; cwd: string; command?: string }
+        session: { name: string; cwd: string; command?: string; parentSessionId?: string }
       ) => Promise<{ id: string }>
       removeSessionFromStore: (
         projectId: string,
         sessionId: string
       ) => Promise<{ ok: boolean }>
+      // Task / Planner
+      getTasks: (projectId: string) => Promise<unknown[]>
+      addTask: (
+        projectId: string,
+        task: { title: string; description?: string; status?: string; command?: string; cwd?: string }
+      ) => Promise<unknown>
+      updateTask: (
+        projectId: string,
+        taskId: string,
+        updates: Record<string, unknown>
+      ) => Promise<unknown>
+      removeTask: (projectId: string, taskId: string) => Promise<{ ok: boolean }>
+      reorderTasks: (projectId: string, taskIds: string[]) => Promise<{ ok: boolean }>
+      getNextTask: (projectId: string) => Promise<unknown>
       exportConfig: () => Promise<{ ok: boolean }>
       importConfig: () => Promise<unknown>
       applyImportedConfig: (
@@ -179,6 +194,53 @@ export default function App(): React.ReactElement {
 
     const removeExit = window.api.onExit(({ id, code }) => {
       updateSessionStatus(id, 'exited', code)
+
+      // Auto-advance: if session was linked to a task and exited successfully, mark done & start next
+      if (code === 0) {
+        const state = useAppStore.getState()
+        const sessionState = state.sessionStates[id]
+        if (!sessionState) return
+        const project = state.projects.find((p) => p.id === sessionState.projectId)
+        if (!project?.tasks) return
+
+        const assignedTask = project.tasks.find(
+          (t) => t.assignedSessionId === id && t.status === 'in-progress'
+        )
+        if (assignedTask) {
+          const updates = { status: 'done' as const, completedAt: Date.now(), assignedSessionId: undefined }
+          state.updateTaskInProject(project.id, assignedTask.id, updates)
+          window.api.updateTask(project.id, assignedTask.id, updates)
+
+          // Auto-start next todo task
+          window.api.getNextTask(project.id).then((next) => {
+            if (!next) return
+            const nextTask = next as { id: string; title: string; command?: string; cwd?: string }
+            if (!nextTask.command) return
+            const cwd = nextTask.cwd || project.sessions[0]?.cwd || '~'
+            const name = nextTask.title
+            window.api.addSessionToStore(project.id, { name, cwd, command: nextTask.command }).then((stored) => {
+              const st = useAppStore.getState()
+              st.addSessionToProject(project.id, { id: stored.id, name, cwd, command: nextTask.command })
+              st.initSessionState(stored.id, project.id)
+              st.updateTaskInProject(project.id, nextTask.id, {
+                status: 'in-progress',
+                assignedSessionId: stored.id
+              })
+              window.api.updateTask(project.id, nextTask.id, {
+                status: 'in-progress',
+                assignedSessionId: stored.id
+              })
+              return window.api.createTerminal({
+                id: stored.id,
+                name,
+                cwd,
+                command: nextTask.command,
+                projectId: project.id
+              })
+            })
+          })
+        }
+      }
     })
 
     const removeInputWaiting = window.api.onInputWaiting(({ id }) => {
@@ -314,7 +376,7 @@ export default function App(): React.ReactElement {
       {/* Main content */}
       <div className="flex-1 overflow-hidden relative">
         {hasProjects ? (
-          <TerminalGrid />
+          <MainContent />
         ) : (
           <EmptyState />
         )}
@@ -331,6 +393,13 @@ export default function App(): React.ReactElement {
       {showConfigPanel && <ConfigPanel />}
     </div>
   )
+}
+
+function MainContent(): React.ReactElement {
+  const { activeProjectId, getProjectViewMode } = useAppStore()
+  const viewMode = activeProjectId ? getProjectViewMode(activeProjectId) : 'terminals'
+
+  return viewMode === 'planner' ? <PlannerBoard /> : <TerminalGrid />
 }
 
 const LAYOUT_MODES = ['auto', '1', '2', '3'] as const

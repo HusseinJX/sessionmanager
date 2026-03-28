@@ -9,9 +9,15 @@ import {
   addProject,
   removeProject,
   addSession,
-  removeSession
+  removeSession,
+  addTask,
+  updateTask,
+  removeTask,
+  reorderTasks,
+  getTasksForProject,
+  getNextTodoTask
 } from './store'
-import type { AppSettings } from './store'
+import type { AppSettings, TaskItem, TaskStatus } from './store'
 import { exportConfig, importConfig, applyImportedConfig, ExportConfig } from './config-io'
 
 export function registerIpcHandlers(win: BrowserWindow): void {
@@ -106,7 +112,7 @@ export function registerIpcHandlers(win: BrowserWindow): void {
       {
         projectId,
         session
-      }: { projectId: string; session: { name: string; cwd: string; command?: string } }
+      }: { projectId: string; session: { name: string; cwd: string; command?: string; parentSessionId?: string } }
     ) => {
       return addSession(projectId, session)
     }
@@ -117,6 +123,78 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     async (_, { projectId, sessionId }: { projectId: string; sessionId: string }) => {
       removeSession(projectId, sessionId)
       return { ok: true }
+    }
+  )
+
+  // ─── Task / Planner management ─────────────────────────────────────────────
+
+  ipcMain.handle(
+    'task:list',
+    async (_, { projectId }: { projectId: string }) => {
+      return getTasksForProject(projectId)
+    }
+  )
+
+  ipcMain.handle(
+    'task:add',
+    async (
+      _,
+      {
+        projectId,
+        task
+      }: {
+        projectId: string
+        task: { title: string; description?: string; status?: TaskStatus; command?: string; cwd?: string }
+      }
+    ) => {
+      return addTask(projectId, {
+        title: task.title,
+        description: task.description || '',
+        status: task.status || 'todo',
+        command: task.command,
+        cwd: task.cwd
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'task:update',
+    async (
+      _,
+      {
+        projectId,
+        taskId,
+        updates
+      }: {
+        projectId: string
+        taskId: string
+        updates: Partial<Omit<TaskItem, 'id' | 'createdAt'>>
+      }
+    ) => {
+      return updateTask(projectId, taskId, updates)
+    }
+  )
+
+  ipcMain.handle(
+    'task:remove',
+    async (_, { projectId, taskId }: { projectId: string; taskId: string }) => {
+      removeTask(projectId, taskId)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'task:reorder',
+    async (_, { projectId, taskIds }: { projectId: string; taskIds: string[] }) => {
+      reorderTasks(projectId, taskIds)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'task:next',
+    async (_, { projectId }: { projectId: string }) => {
+      return getNextTodoTask(projectId)
     }
   )
 

@@ -122,6 +122,33 @@ contextBridge.exposeInMainWorld('api', {
   removeSessionFromStore: (projectId: string, sessionId: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('session:store-remove', { projectId, sessionId }),
 
+  // ─── Task / Planner management ──────────────────────────────────────────
+
+  getTasks: (projectId: string): Promise<unknown[]> =>
+    ipcRenderer.invoke('task:list', { projectId }),
+
+  addTask: (
+    projectId: string,
+    task: { title: string; description?: string; status?: string; command?: string; cwd?: string }
+  ): Promise<unknown> =>
+    ipcRenderer.invoke('task:add', { projectId, task }),
+
+  updateTask: (
+    projectId: string,
+    taskId: string,
+    updates: Record<string, unknown>
+  ): Promise<unknown> =>
+    ipcRenderer.invoke('task:update', { projectId, taskId, updates }),
+
+  removeTask: (projectId: string, taskId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('task:remove', { projectId, taskId }),
+
+  reorderTasks: (projectId: string, taskIds: string[]): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('task:reorder', { projectId, taskIds }),
+
+  getNextTask: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke('task:next', { projectId }),
+
   // ─── Config export/import ────────────────────────────────────────────────
 
   exportConfig: (): Promise<{ ok: boolean }> =>

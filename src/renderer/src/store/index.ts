@@ -1,6 +1,21 @@
 import { create } from 'zustand'
 
 // Types
+export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'done'
+
+export interface TaskItem {
+  id: string
+  title: string
+  description: string
+  status: TaskStatus
+  order: number
+  assignedSessionId?: string
+  command?: string
+  cwd?: string
+  createdAt: number
+  completedAt?: number
+}
+
 export interface SessionConfig {
   id: string
   name: string
@@ -14,6 +29,7 @@ export interface Project {
   id: string
   name: string
   sessions: SessionConfig[]
+  tasks: TaskItem[]
 }
 
 export interface SessionRuntimeState {
@@ -52,6 +68,8 @@ interface AppState {
   showAddSessionModal: boolean
   showAddProjectModal: boolean
   showConfigPanel: boolean
+  // View mode per project: 'terminals' or 'planner'
+  projectViewMode: Record<string, 'terminals' | 'planner'>
   // Settings
   settings: AppSettings
   // Actions
@@ -75,6 +93,13 @@ interface AppState {
   setSettings: (settings: Partial<AppSettings>) => void
   getActiveProject: () => Project | null
   getSessionsForActiveProject: () => SessionConfig[]
+  // Task / Planner actions
+  setProjectViewMode: (projectId: string, mode: 'terminals' | 'planner') => void
+  getProjectViewMode: (projectId: string) => 'terminals' | 'planner'
+  setProjectTasks: (projectId: string, tasks: TaskItem[]) => void
+  addTaskToProject: (projectId: string, task: TaskItem) => void
+  updateTaskInProject: (projectId: string, taskId: string, updates: Partial<TaskItem>) => void
+  removeTaskFromProject: (projectId: string, taskId: string) => void
 }
 
 // ANSI escape sequence stripper for preview text
@@ -125,6 +150,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showAddSessionModal: false,
   showAddProjectModal: false,
   showConfigPanel: false,
+  projectViewMode: {},
   settings: {
     theme: 'dark',
     gridColumns: 'auto',
@@ -305,5 +331,53 @@ export const useAppStore = create<AppState>((set, get) => ({
   getSessionsForActiveProject: () => {
     const project = get().getActiveProject()
     return (project?.sessions ?? []).filter((s) => !s.parentSessionId)
-  }
+  },
+
+  // ─── Task / Planner ──────────────────────────────────────────────────────
+
+  setProjectViewMode: (projectId, mode) =>
+    set((state) => ({
+      projectViewMode: { ...state.projectViewMode, [projectId]: mode }
+    })),
+
+  getProjectViewMode: (projectId) => {
+    return get().projectViewMode[projectId] || 'terminals'
+  },
+
+  setProjectTasks: (projectId, tasks) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, tasks } : p
+      )
+    })),
+
+  addTaskToProject: (projectId, task) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, tasks: [...(p.tasks ?? []), task] } : p
+      )
+    })),
+
+  updateTaskInProject: (projectId, taskId, updates) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              tasks: (p.tasks ?? []).map((t) =>
+                t.id === taskId ? { ...t, ...updates } : t
+              )
+            }
+          : p
+      )
+    })),
+
+  removeTaskFromProject: (projectId, taskId) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, tasks: (p.tasks ?? []).filter((t) => t.id !== taskId) }
+          : p
+      )
+    }))
 }))
