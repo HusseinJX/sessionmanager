@@ -446,3 +446,43 @@ The tray icon (`resources/tray-icon.png`) was not appearing in the packaged Elec
 - `electron-builder.yml` cleaned up (`buildResources` directive removed, stale `extraResources` removed)
 
 **Files changed:** `package.json`, `src/main/index.ts`, `electron-builder.yml`
+
+---
+
+## Checkpoint 21 — Per-project kanban planner with per-terminal task queues
+
+Added a built-in project planner / kanban board to SessionManager. Each project now has a task board alongside its terminal grid, with a toggle to switch between views.
+
+**Data model:**
+- `TaskItem` type added to `store.ts`: id, title, description, status (backlog/todo/in-progress/done), order, command, cwd, assignedSessionId, createdAt, completedAt
+- `ProjectConfig` gains a `tasks[]` array (auto-backfilled for existing projects)
+- Task CRUD functions: `addTask`, `updateTask`, `removeTask`, `reorderTasks`, `getNextTodoTask`
+
+**IPC & preload:**
+- 6 new IPC channels: `task:list`, `task:add`, `task:update`, `task:remove`, `task:reorder`, `task:next`
+- All exposed via preload contextBridge
+
+**UI — PlannerBoard component:**
+- 4-column kanban: Backlog, Todo, In Progress, Done
+- Drag-and-drop tasks between columns
+- Quick-add inline cards per column
+- Edit task title, description, command, and assigned terminal
+- Run button (▶) on tasks with commands — spawns a terminal session linked to the task
+- Session badge on cards showing which terminal owns the task
+
+**Per-terminal task filtering:**
+- Dropdown at top of planner: "Planner for: [All terminals | Terminal Name]"
+- Selecting a terminal filters the board to only that terminal's tasks
+- New tasks auto-assign to the selected terminal
+- Tasks can be reassigned via the edit form
+
+**View toggle:**
+- `ProjectTabs` shows a "Terminals | Planner" toggle next to project tabs
+- View mode stored per-project in Zustand state
+
+**Auto-advance:**
+- When a session linked to an in-progress task exits with code 0: task moves to Done, next Todo task with a command auto-starts in a new session
+- Chain continues until the todo queue is empty — builders work through their roadmap autonomously
+
+**Files changed:** `src/main/store.ts`, `src/main/ipc-handlers.ts`, `src/preload/index.ts`, `src/renderer/src/store/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/components/ProjectTabs.tsx`
+**Files added:** `src/renderer/src/components/PlannerBoard.tsx`
