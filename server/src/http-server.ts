@@ -2,7 +2,7 @@ import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTasksForProject, addTask, removeTask } from './store'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -301,6 +301,40 @@ export class HttpApiServer {
           this.json(res, 400, { error: 'Invalid JSON body' })
         }
       })
+      return
+    }
+
+    // GET/POST /api/projects/:id/tasks
+    const tasksMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/tasks$/)
+    if (req.method === 'GET' && tasksMatch) {
+      const tasks = getTasksForProject(tasksMatch[1])
+      this.json(res, 200, tasks)
+      return
+    }
+
+    if (req.method === 'POST' && tasksMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const { title, description, status } = JSON.parse(body) as { title: string; description?: string; status?: string }
+          if (!title) return this.json(res, 400, { error: 'title required' })
+          const task = addTask(tasksMatch[1], {
+            title,
+            description: description ?? '',
+            status: (status as any) ?? 'backlog',
+          })
+          this.json(res, 201, task)
+        } catch (err) {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
+    // DELETE /api/projects/:pid/tasks/:tid
+    const taskDeleteMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)$/)
+    if (req.method === 'DELETE' && taskDeleteMatch) {
+      removeTask(taskDeleteMatch[1], taskDeleteMatch[2])
+      this.json(res, 200, { ok: true })
       return
     }
 

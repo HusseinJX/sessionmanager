@@ -1,5 +1,6 @@
 import TelegramBot from 'node-telegram-bot-api'
 import type { SessionManager } from './session-manager'
+import { getProjects, addTask } from './store'
 
 export interface TelegramConfig {
   botToken: string
@@ -52,6 +53,11 @@ export class TelegramBridge {
 
       if (msg.text === '/waiting') {
         this.sendWaiting(msg.chat.id)
+        return
+      }
+
+      if (msg.text?.startsWith('/backlog')) {
+        this.handleBacklog(msg.chat.id, msg.text.slice('/backlog'.length).trim())
         return
       }
 
@@ -143,6 +149,67 @@ export class TelegramBridge {
       return `${icon} *${escapeMarkdown(s.name)}* \u2014 ${s.status}${s.inputWaiting ? ' (waiting)' : ''}`
     })
     this.bot?.sendMessage(chatId, lines.join('\n'), { parse_mode: 'Markdown' })
+  }
+
+  private async handleBacklog(chatId: number | string, text: string): Promise<void> {
+    const projects = getProjects()
+    if (projects.length === 0) {
+      this.bot?.sendMessage(chatId, 'No projects found.')
+      return
+    }
+
+    if (!text) {
+      // Show usage + list projects
+      const names = projects.map((p) => `• *${escapeMarkdown(p.name)}*`).join('\n')
+      this.bot?.sendMessage(
+        chatId,
+        `Usage: \`/backlog task title\` or \`/backlog project: task title\`\n\nProjects:\n${names}`,
+        { parse_mode: 'Markdown' }
+      )
+      return
+    }
+
+    let projectId: string
+    let projectName: string
+    let title: string
+
+    // Check for "projectName: task title" syntax
+    const colonIdx = text.indexOf(':')
+    if (colonIdx > 0) {
+      const targetName = text.slice(0, colonIdx).trim().toLowerCase()
+      const match = projects.find((p) => p.name.toLowerCase() === targetName)
+      if (match) {
+        projectId = match.id
+        projectName = match.name
+        title = text.slice(colonIdx + 1).trim()
+      } else {
+        // No project match — treat the whole thing as the title, use first project
+        projectId = projects[0].id
+        projectName = projects[0].name
+        title = text
+      }
+    } else {
+      // No colon — use first project
+      projectId = projects[0].id
+      projectName = projects[0].name
+      title = text
+    }
+
+    if (!title) {
+      this.bot?.sendMessage(chatId, 'Please provide a task title.')
+      return
+    }
+
+    try {
+      const task = addTask(projectId, { title, description: '', status: 'backlog' })
+      this.bot?.sendMessage(
+        chatId,
+        `✅ Added to *${escapeMarkdown(projectName)}* backlog:\n${escapeMarkdown(title)}`,
+        { parse_mode: 'Markdown' }
+      )
+    } catch (err) {
+      this.bot?.sendMessage(chatId, `Failed to add task: ${err}`)
+    }
   }
 
   private async sendWaiting(chatId: number | string): Promise<void> {

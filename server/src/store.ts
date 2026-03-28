@@ -2,6 +2,21 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 
+export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'done'
+
+export interface TaskItem {
+  id: string
+  title: string
+  description: string
+  status: TaskStatus
+  order: number
+  assignedSessionId?: string
+  command?: string
+  cwd?: string
+  createdAt: number
+  completedAt?: number
+}
+
 export interface SessionConfig {
   id: string
   name: string
@@ -14,6 +29,7 @@ export interface ProjectConfig {
   id: string
   name: string
   sessions: SessionConfig[]
+  tasks: TaskItem[]
 }
 
 export interface StoreData {
@@ -50,7 +66,12 @@ function save(): void {
 }
 
 export function getProjects(): ProjectConfig[] {
-  return store().projects
+  const projects = store().projects
+  // Backfill tasks array for projects created before task feature
+  for (const p of projects) {
+    if (!p.tasks) p.tasks = []
+  }
+  return projects
 }
 
 export function setProjects(projects: ProjectConfig[]): void {
@@ -72,7 +93,7 @@ export function getServerPort(): number {
 }
 
 export function addProject(name: string): ProjectConfig {
-  const project: ProjectConfig = { id: uuidv4(), name, sessions: [] }
+  const project: ProjectConfig = { id: uuidv4(), name, sessions: [], tasks: [] }
   store().projects.push(project)
   save()
   return project
@@ -121,5 +142,39 @@ export function updateSessionCwd(sessionId: string, cwd: string): void {
       save()
       return
     }
+  }
+}
+
+// --- Task CRUD ---
+
+export function getTasksForProject(projectId: string): TaskItem[] {
+  const project = store().projects.find((p) => p.id === projectId)
+  return project?.tasks ?? []
+}
+
+export function addTask(
+  projectId: string,
+  task: Omit<TaskItem, 'id' | 'createdAt' | 'order'>
+): TaskItem {
+  const project = store().projects.find((p) => p.id === projectId)
+  if (!project) throw new Error(`Project ${projectId} not found`)
+  if (!project.tasks) project.tasks = []
+  const maxOrder = project.tasks.reduce((max, t) => Math.max(max, t.order), -1)
+  const newTask: TaskItem = {
+    ...task,
+    id: uuidv4(),
+    order: maxOrder + 1,
+    createdAt: Date.now()
+  }
+  project.tasks.push(newTask)
+  save()
+  return newTask
+}
+
+export function removeTask(projectId: string, taskId: string): void {
+  const project = store().projects.find((p) => p.id === projectId)
+  if (project) {
+    project.tasks = (project.tasks ?? []).filter((t) => t.id !== taskId)
+    save()
   }
 }
