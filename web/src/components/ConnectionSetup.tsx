@@ -6,21 +6,13 @@ interface ConnectionSetupProps {
   error?: string | null
 }
 
-/** Detect if the web UI is served from the same origin as the API server */
-function isSameOrigin(): boolean {
-  const host = window.location.hostname
-  return host === '127.0.0.1' || host === 'localhost'
-}
-
 export default function ConnectionSetup({ onConnect, error }: ConnectionSetupProps) {
-  const sameOrigin = isSameOrigin()
-  const [url, setUrl] = useState(sameOrigin ? window.location.origin : 'http://127.0.0.1:7543')
   const [token, setToken] = useState('')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!token) return
-    onConnect({ url: url.replace(/\/$/, ''), token })
+    onConnect({ url: window.location.origin, token })
   }
 
   return (
@@ -30,27 +22,12 @@ export default function ConnectionSetup({ onConnect, error }: ConnectionSetupPro
         className="flex flex-col gap-4 p-6 bg-bg-card border border-border-subtle rounded-lg w-[360px]"
       >
         <h1 className="text-lg font-semibold text-text-primary">Session Manager</h1>
-        <p className="text-sm text-text-muted -mt-2">
-          {sameOrigin ? 'Enter your API token to connect' : 'Connect to your running instance'}
-        </p>
+        <p className="text-sm text-text-muted -mt-2">Enter your API token to connect</p>
 
         {error && (
           <div className="text-xs text-accent-red bg-accent-red/10 px-3 py-2 rounded">
             {error}
           </div>
-        )}
-
-        {!sameOrigin && (
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">Server URL</span>
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className="bg-bg-base border border-border-subtle rounded px-3 py-2 text-sm text-text-primary placeholder-text-muted focus:border-accent-blue outline-none"
-              placeholder="http://127.0.0.1:7543"
-            />
-          </label>
         )}
 
         <label className="flex flex-col gap-1">
