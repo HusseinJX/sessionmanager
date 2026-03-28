@@ -1,14 +1,14 @@
 name: sessionmanager
 region: nyc
-static_sites:
-  - name: sessionmanager-web
+services:
+  - name: sessionmanager
     github:
       repo: HusseinJX/sessionmanager
       branch: master
       deploy_on_push: true
-    source_dir: web
-    build_command: npm install && npm run build
-    output_dir: dist
-    environment_slug: node-js
+    dockerfile_path: server/Dockerfile
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    http_port: 8080
     routes:
       - path: /

@@ -2,7 +2,7 @@ import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { SessionManager } from './session-manager'
-import { getProjects } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession } from './store'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -28,7 +28,6 @@ export class HttpApiServer {
   private sessionManager: SessionManager
   private token: string
   private port: number
-  private running = false
 
   constructor(sessionManager: SessionManager, port: number, token: string) {
     this.sessionManager = sessionManager
@@ -39,8 +38,7 @@ export class HttpApiServer {
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => this.handleRequest(req, res))
-      this.server.listen(this.port, '127.0.0.1', () => {
-        this.running = true
+      this.server.listen(this.port, '0.0.0.0', () => {
         this.bindSessionEvents()
         resolve()
       })
@@ -49,21 +47,12 @@ export class HttpApiServer {
   }
 
   stop(): void {
-    this.running = false
     for (const client of this.clients) {
-      try { client.res.end() } catch { /* ignore */ }
+      try { client.res.end() } catch {}
     }
     this.clients = []
     this.server?.close()
     this.server = null
-  }
-
-  isRunning(): boolean {
-    return this.running
-  }
-
-  getPort(): number {
-    return this.port
   }
 
   private bindSessionEvents(): void {
@@ -96,14 +85,14 @@ export class HttpApiServer {
   private authenticate(req: http.IncomingMessage): boolean {
     const auth = req.headers['authorization']
     if (auth?.startsWith('Bearer ') && auth.slice(7) === this.token) return true
-    const url = new URL(req.url || '/', `http://127.0.0.1:${this.port}`)
+    const url = new URL(req.url || '/', `http://localhost:${this.port}`)
     if (url.searchParams.get('token') === this.token) return true
     return false
   }
 
   private cors(res: http.ServerResponse): void {
     res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   }
 
@@ -111,6 +100,14 @@ export class HttpApiServer {
     this.cors(res)
     res.writeHead(status, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(body))
+  }
+
+  private readBody(req: http.IncomingMessage): Promise<string> {
+    return new Promise((resolve) => {
+      let body = ''
+      req.on('data', (chunk) => { body += chunk })
+      req.on('end', () => resolve(body))
+    })
   }
 
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -122,7 +119,7 @@ export class HttpApiServer {
       return
     }
 
-    const url = new URL(req.url || '/', `http://127.0.0.1:${this.port}`)
+    const url = new URL(req.url || '/', `http://localhost:${this.port}`)
     const urlPath = url.pathname
 
     // Only require auth for /api/ routes
@@ -137,7 +134,7 @@ export class HttpApiServer {
       return
     }
 
-    // GET /api/projects — full project structure from store
+    // GET /api/projects
     if (req.method === 'GET' && urlPath === '/api/projects') {
       const projects = getProjects()
       const statuses = this.sessionManager.getAllSessionsStatus()
@@ -148,14 +145,83 @@ export class HttpApiServer {
         sessions: p.sessions.map((s) => ({
           ...s,
           ...(statusMap.get(s.id) ?? {}),
-          parentSessionId: s.parentSessionId
-        }))
+          parentSessionId: s.parentSessionId,
+        })),
       }))
       this.json(res, 200, result)
       return
     }
 
-    // GET /api/events  (SSE)
+    // POST /api/projects — create a new project
+    if (req.method === 'POST' && urlPath === '/api/projects') {
+      this.readBody(req).then((body) => {
+        try {
+          const { name } = JSON.parse(body) as { name: string }
+          if (!name) return this.json(res, 400, { error: 'name required' })
+          const project = addProject(name)
+          this.json(res, 201, project)
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
+    // POST /api/projects/:id/sessions — create a session
+    const sessionCreateMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions$/)
+    if (req.method === 'POST' && sessionCreateMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const { name, cwd, command } = JSON.parse(body) as { name: string; cwd: string; command?: string }
+          if (!name || !cwd) return this.json(res, 400, { error: 'name and cwd required' })
+          const projectId = sessionCreateMatch[1]
+          const session = addSession(projectId, { name, cwd, command })
+          const project = getProjects().find((p) => p.id === projectId)
+          // Start the pty
+          this.sessionManager.createSession({
+            id: session.id,
+            name: session.name,
+            cwd: session.cwd,
+            command: session.command,
+            projectId,
+            projectName: project?.name,
+            status: 'running',
+          })
+          this.pushSse('session-created', { projectId, session })
+          this.json(res, 201, session)
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
+    // DELETE /api/projects/:id
+    const projectDeleteMatch = urlPath.match(/^\/api\/projects\/([^/]+)$/)
+    if (req.method === 'DELETE' && projectDeleteMatch) {
+      const projectId = projectDeleteMatch[1]
+      const project = getProjects().find((p) => p.id === projectId)
+      if (project) {
+        for (const s of project.sessions) {
+          this.sessionManager.destroySession(s.id)
+        }
+        removeProject(projectId)
+      }
+      this.json(res, 200, { ok: true })
+      return
+    }
+
+    // DELETE /api/projects/:pid/sessions/:sid
+    const sessionDeleteMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)$/)
+    if (req.method === 'DELETE' && sessionDeleteMatch) {
+      const [, projectId, sessionId] = sessionDeleteMatch
+      this.sessionManager.destroySession(sessionId)
+      removeSession(projectId, sessionId)
+      this.json(res, 200, { ok: true })
+      return
+    }
+
+    // GET /api/events (SSE)
     if (req.method === 'GET' && urlPath === '/api/events') {
       this.handleSse(req, res)
       return
@@ -177,21 +243,52 @@ export class HttpApiServer {
     // POST /api/sessions/:id/command
     const cmdMatch = urlPath.match(/^\/api\/sessions\/([^/]+)\/command$/)
     if (req.method === 'POST' && cmdMatch) {
-      this.handleCommand(cmdMatch[1], req, res)
+      this.readBody(req).then((body) => {
+        try {
+          const { command } = JSON.parse(body) as { command?: string }
+          if (!command || typeof command !== 'string') {
+            return this.json(res, 400, { error: 'Body must contain a "command" string' })
+          }
+          const ok = this.sessionManager.writeToSession(cmdMatch[1], command + '\r')
+          if (!ok) return this.json(res, 404, { error: 'Session not found' })
+          this.json(res, 200, { ok: true, sessionId: cmdMatch[1], command })
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON body' })
+        }
+      })
       return
     }
 
-    // Serve web UI static files for non-API routes (no auth required for static assets)
-    this.serveStatic(url.pathname, res)
+    // Serve web UI static files
+    this.serveStatic(urlPath, res)
+  }
+
+  private handleSse(req: http.IncomingMessage, res: http.ServerResponse): void {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    })
+    res.write('retry: 3000\n\n')
+
+    const snapshot = this.sessionManager.getAllSessionsStatus()
+    res.write(`event: connected\ndata: ${JSON.stringify(snapshot)}\n\n`)
+
+    const client: SseClient = { id: ++this.clientIdCounter, res }
+    this.clients.push(client)
+
+    req.on('close', () => {
+      this.clients = this.clients.filter((c) => c.id !== client.id)
+    })
   }
 
   private getWebUiDir(): string | null {
-    // In dev: web/dist relative to project root
-    // In production: resources/web-ui inside the app bundle
     const candidates = [
-      path.join(__dirname, '../../web/dist'),           // dev
-      path.join(__dirname, '../../../web/dist'),         // dev alt
-      path.join(process.resourcesPath ?? '', 'web-ui'), // packaged
+      path.join(__dirname, '../../web-ui'),    // production: alongside dist/
+      path.join(__dirname, '../web-ui'),        // alt
+      path.join(__dirname, '../../web/dist'),   // dev: web/dist
     ]
     for (const dir of candidates) {
       if (fs.existsSync(path.join(dir, 'index.html'))) return dir
@@ -202,21 +299,18 @@ export class HttpApiServer {
   private serveStatic(urlPath: string, res: http.ServerResponse): void {
     const webDir = this.getWebUiDir()
     if (!webDir) {
-      this.json(res, 404, { error: 'Not found' })
+      this.json(res, 404, { error: 'Web UI not found' })
       return
     }
 
-    // Map URL path to file, default to index.html for SPA routing
     let filePath = path.join(webDir, urlPath === '/' ? 'index.html' : urlPath)
 
-    // Prevent directory traversal
     if (!filePath.startsWith(webDir)) {
       this.json(res, 403, { error: 'Forbidden' })
       return
     }
 
     if (!fs.existsSync(filePath)) {
-      // SPA fallback — serve index.html for client-side routes
       filePath = path.join(webDir, 'index.html')
     }
 
@@ -230,54 +324,5 @@ export class HttpApiServer {
     } catch {
       this.json(res, 404, { error: 'Not found' })
     }
-  }
-
-  private handleSse(req: http.IncomingMessage, res: http.ServerResponse): void {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-    })
-    res.write('retry: 3000\n\n')
-
-    // Send current status snapshot on connect
-    const snapshot = this.sessionManager.getAllSessionsStatus()
-    res.write(`event: connected\ndata: ${JSON.stringify(snapshot)}\n\n`)
-
-    const client: SseClient = { id: ++this.clientIdCounter, res }
-    this.clients.push(client)
-
-    req.on('close', () => {
-      this.clients = this.clients.filter((c) => c.id !== client.id)
-    })
-  }
-
-  private handleCommand(
-    sessionId: string,
-    req: http.IncomingMessage,
-    res: http.ServerResponse
-  ): void {
-    let body = ''
-    req.on('data', (chunk) => { body += chunk })
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body) as { command?: string }
-        const command = parsed.command
-        if (!command || typeof command !== 'string') {
-          this.json(res, 400, { error: 'Body must contain a "command" string' })
-          return
-        }
-        const ok = this.sessionManager.writeToSession(sessionId, command + '\r')
-        if (!ok) {
-          this.json(res, 404, { error: 'Session not found' })
-          return
-        }
-        this.json(res, 200, { ok: true, sessionId, command })
-      } catch {
-        this.json(res, 400, { error: 'Invalid JSON body' })
-      }
-    })
   }
 }
