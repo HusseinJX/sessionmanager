@@ -1,0 +1,14 @@
+name: sessionmanager
+region: nyc
+static_sites:
+  - name: sessionmanager-web
+    github:
+      repo: HusseinJX/sessionmanager
+      branch: master
+      deploy_on_push: true
+    source_dir: web
+    build_command: npm install && npm run build
+    output_dir: dist
+    environment_slug: node-js
+    routes:
+      - path: /
