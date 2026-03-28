@@ -56,6 +56,11 @@ export class TelegramBridge {
         return
       }
 
+      if (msg.text === '/help') {
+        this.sendHelp(msg.chat.id)
+        return
+      }
+
       if (msg.text?.startsWith('/backlog')) {
         this.handleBacklog(msg.chat.id, msg.text.slice('/backlog'.length).trim())
         return
@@ -135,6 +140,22 @@ export class TelegramBridge {
     } catch (err) {
       console.error('Telegram send error:', err)
     }
+  }
+
+  private async sendHelp(chatId: number | string): Promise<void> {
+    const text = [
+      '*Commands:*',
+      '`/status` — list all sessions',
+      '`/waiting` — resend input notifications',
+      '`/backlog task title` — add to backlog',
+      '`/backlog project: title` — add to specific project',
+      '`/help` — this message',
+      '',
+      '*Direct input:*',
+      '`sessionName: command` — send to a session',
+      'Reply to a notification — send input to that terminal',
+    ].join('\n')
+    this.bot?.sendMessage(chatId, text, { parse_mode: 'Markdown' })
   }
 
   private async sendStatus(chatId: number | string): Promise<void> {
