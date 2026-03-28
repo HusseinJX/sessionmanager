@@ -433,3 +433,16 @@ Made the web UI responsive for mobile and added runner add/remove to the expande
 - Server `POST /api/projects/:id/sessions` now accepts `parentSessionId`
 
 **Files changed:** `server/src/http-server.ts`, `web/src/api.ts`, `web/src/components/ConnectionSetup.tsx`, `web/src/components/ExpandedSession.tsx`, `web/src/components/ProjectTabs.tsx`, `web/src/components/TerminalCard.tsx`, `web/src/components/TerminalGrid.tsx`
+
+---
+
+## Checkpoint 20 — Fix tray icon missing in packaged .app
+
+The tray icon (`resources/tray-icon.png`) was not appearing in the packaged Electron `.app` because it wasn't included in the asar archive. The `files` config only included `out/**/*`, and `extraResources` wasn't working due to a `buildResources` conflict.
+
+**Fix:**
+- `package.json` build script now copies `resources/tray-icon.png` into `out/` after `electron-vite build`
+- `src/main/index.ts` production icon path changed from `process.resourcesPath` to `path.join(__dirname, '..', 'tray-icon.png')` — resolves inside the asar correctly
+- `electron-builder.yml` cleaned up (`buildResources` directive removed, stale `extraResources` removed)
+
+**Files changed:** `package.json`, `src/main/index.ts`, `electron-builder.yml`

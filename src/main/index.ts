@@ -32,7 +32,7 @@ function createTrayIcon(): Tray {
   if (isDev) {
     iconPath = path.join(process.cwd(), 'resources', 'tray-icon.png')
   } else {
-    iconPath = path.join(process.resourcesPath, 'tray-icon.png')
+    iconPath = path.join(__dirname, '..', 'tray-icon.png')
   }
 
   let icon: Electron.NativeImage

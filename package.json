@@ -8,7 +8,7 @@
     "dev": "electron-vite dev",
     "dev:web": "cd web && npm run dev",
     "dev:all": "concurrently -n app,web -c cyan,magenta \"npm run dev\" \"npm run dev:web\"",
-    "build": "electron-vite build",
+    "build": "electron-vite build && cp resources/tray-icon.png out/tray-icon.png",
     "preview": "electron-vite preview",
     "postinstall": "electron-rebuild -f -w node-pty",
     "pack": "electron-vite build && electron-builder --dir",

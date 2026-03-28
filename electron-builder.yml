@@ -2,9 +2,11 @@ appId: com.sessionmanager.app
 productName: SessionManager
 directories:
   output: dist
-  buildResources: resources
 files:
   - out/**/*
+extraResources:
+  - from: "resources/tray-icon.png"
+    to: "tray-icon.png"
 asarUnpack:
   - "**/node_modules/node-pty/**"
 npmRebuild: true
