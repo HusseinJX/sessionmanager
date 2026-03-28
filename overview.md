@@ -486,3 +486,70 @@ Added a built-in project planner / kanban board to SessionManager. Each project 
 
 **Files changed:** `src/main/store.ts`, `src/main/ipc-handlers.ts`, `src/preload/index.ts`, `src/renderer/src/store/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/components/ProjectTabs.tsx`
 **Files added:** `src/renderer/src/components/PlannerBoard.tsx`
+
+---
+
+## Checkpoint 22 — Telegram bot integration for input notifications
+
+Added a Telegram bot bridge so the server sends you a message whenever a terminal needs input, and you can reply on Telegram to send that input to the right terminal.
+
+**New module:** `server/src/telegram-bot.ts`
+- `TelegramBridge` class subscribes to `input-waiting` events from `SessionManager`
+- On input-waiting: sends a Telegram message with session name, cwd, and last 8 lines of output
+- Reply to any notification message → text is routed as input to the correct terminal (mapped by Telegram message ID → session ID)
+- `/status` command — lists all sessions with running/waiting/exited status
+- `/waiting` command — re-sends notifications for all currently waiting sessions
+- `sessionName: command` syntax — send a command to any session by name directly
+
+**Configuration:**
+- Environment variables: `TG_BOT_TOKEN` + `TG_CHAT_ID`
+- Or persist via API: `POST /api/telegram/config` with `{ botToken, chatId }` (saved to `data.json`)
+- `GET /api/telegram/config` — check if configured (token is masked)
+
+**Dependencies added:** `node-telegram-bot-api` + `@types/node-telegram-bot-api`
+
+**Files changed:** `server/src/store.ts` (telegram config fields + getter/setter), `server/src/index.ts` (starts bot on boot), `server/src/http-server.ts` (telegram config API endpoints)
+**Files added:** `server/src/telegram-bot.ts`
+
+---
+
+## Checkpoint 23 — Telegram bot deployed and live on DigitalOcean
+
+Deployed the Telegram bot integration to the production droplet (`64.23.191.7`). Bot is connected and responding.
+
+**Deployment steps performed:**
+1. Synced updated server code to droplet via `rsync` to `/opt/sessionmanager/server/`
+2. Installed new dependency (`node-telegram-bot-api`) and rebuilt TypeScript on the droplet
+3. Added `TG_BOT_TOKEN` and `TG_CHAT_ID` environment variables to the systemd service file
+4. Restarted the service — logs confirm "Telegram bot connected"
+
+**Current droplet systemd config** (`/etc/systemd/system/sessionmanager.service`):
+- `WorkingDirectory=/opt/sessionmanager/server`
+- `ExecStart=/usr/bin/node dist/index.js`
+- `PORT=8080`, `SM_DATA_DIR=/var/lib/sessionmanager`
+- `SM_TOKEN` for HTTP API auth
+- `TG_BOT_TOKEN` + `TG_CHAT_ID` for Telegram
+
+**How to redeploy after code changes:**
+```bash
+# 1. Sync code (single line, no line breaks)
+rsync -avz --progress --exclude node_modules --exclude dist --exclude out /Users/xen/sessionmanager/server/ root@64.23.191.7:/opt/sessionmanager/server/
+
+# 2. Build on server
+ssh root@64.23.191.7 "cd /opt/sessionmanager/server && npm install && npm run build"
+
+# 3. Restart
+ssh root@64.23.191.7 "systemctl restart sessionmanager"
+
+# 4. Verify
+ssh root@64.23.191.7 "journalctl -u sessionmanager -n 15 --no-pager"
+```
+
+**Telegram bot usage:**
+- Automatic notifications when any terminal needs input (with session name, cwd, last 8 lines)
+- Reply to a notification → sends your reply as input to that terminal
+- `/status` — list all sessions with state
+- `/waiting` — re-send notifications for all waiting sessions
+- `SessionName: command` — send a command to a session by name
+
+**Verified working:** `/status` returns session list, bot responds in Telegram.
