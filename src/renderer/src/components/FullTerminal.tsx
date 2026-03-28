@@ -3,27 +3,34 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { CanvasAddon } from '@xterm/addon-canvas'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { useAppStore, SessionConfig, SessionRuntimeState } from '../store'
+import { useAppStore, SessionRuntimeState, SessionConfig } from '../store'
 import '@xterm/xterm/css/xterm.css'
 
 interface FullTerminalProps {
   sessionId: string
 }
 
+// Runners are persisted SessionConfigs with parentSessionId set
+
 function SidebarItem({
-  session,
+  label,
+  sublabel,
   runtimeState,
   isActive,
-  onClick
+  isPrimary,
+  onClick,
+  onRemove,
 }: {
-  session: SessionConfig
+  label: string
+  sublabel?: string
   runtimeState: SessionRuntimeState | undefined
   isActive: boolean
+  isPrimary?: boolean
   onClick: () => void
+  onRemove?: () => void
 }): React.ReactElement {
   const status = runtimeState?.status ?? 'running'
   const inputWaiting = runtimeState?.inputWaiting ?? false
-  const previewLines = runtimeState?.previewLines ?? []
 
   const dotColor = inputWaiting
     ? 'bg-accent-red animate-ping'
@@ -35,35 +42,41 @@ function SidebarItem({
     <div
       onClick={onClick}
       className={`
-        px-2 py-2 cursor-pointer border-b border-border-subtle transition-colors
+        px-2 py-2 cursor-pointer border-b border-border-subtle transition-colors group/item
         ${isActive ? 'bg-bg-overlay border-l-2 border-l-accent-green' : 'hover:bg-bg-overlay/60 border-l-2 border-l-transparent'}
       `}
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
-        <span className={`text-xs truncate ${isActive ? 'text-text-primary font-medium' : 'text-text-muted'}`}>
-          {session.name}
+        <span className={`text-xs truncate flex-1 ${isActive ? 'text-text-primary font-medium' : 'text-text-muted'}`}>
+          {label}
         </span>
+        {isPrimary && (
+          <span className="text-[9px] text-text-muted/60 flex-shrink-0 uppercase tracking-wider">main</span>
+        )}
+        {onRemove && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRemove() }}
+            className="opacity-0 group-hover/item:opacity-100 text-text-muted hover:text-accent-red transition-all text-xs leading-none flex-shrink-0"
+            title="Remove runner"
+          >
+            ×
+          </button>
+        )}
       </div>
-      {previewLines.length > 0 && (
-        <div className="mt-1 space-y-px pl-3">
-          {previewLines.slice(-3).map((line, i) => (
-            <div
-              key={i}
-              className="text-xs font-mono truncate"
-              style={{ color: '#484f58', fontSize: '10px' }}
-            >
-              {line}
-            </div>
-          ))}
-        </div>
+      {sublabel && (
+        <div className="mt-0.5 pl-3 text-[10px] font-mono text-text-muted/60 truncate">{sublabel}</div>
       )}
     </div>
   )
 }
 
 export default function FullTerminal({ sessionId }: FullTerminalProps): React.ReactElement {
-  const { setExpandedSession, sessionStates, projects, markSessionViewed, addSessionToProject, initSessionState } = useAppStore()
+  const {
+    setExpandedSession, sessionStates, projects,
+    markSessionViewed, initSessionState,
+    addSessionToProject, removeSessionFromProject,
+  } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
 
@@ -76,11 +89,10 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
 
   const [cmdInput, setCmdInput] = useState('')
 
-  // Find the project that owns the active session
-  const ownerProject = projects.find((p) => p.sessions.some((s) => s.id === activeSessionId))
-    ?? projects.find((p) => p.sessions.some((s) => s.id === sessionId))
-  const siblings = ownerProject?.sessions ?? []
-  const activeConfig = siblings.find((s) => s.id === activeSessionId)
+  const ownerProject = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
+  const primaryConfig = ownerProject?.sessions.find((s) => s.id === sessionId)
+  // Runners are persisted sessions with parentSessionId === sessionId
+  const runners: SessionConfig[] = ownerProject?.sessions.filter((s) => s.parentSessionId === sessionId) ?? []
   const sessionState = sessionStates[activeSessionId]
 
   const handleClose = useCallback((): void => {
@@ -104,16 +116,26 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
     setCmdInput('')
   }
 
-  const handleAddSession = (): void => {
+  const handleAddRunner = (): void => {
     if (!ownerProject) return
-    const lastCwd = siblings.at(-1)?.cwd ?? '~'
-    const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
-    window.api.addSessionToStore(ownerProject.id, { name, cwd: lastCwd }).then((stored) => {
-      addSessionToProject(ownerProject.id, { id: stored.id, name, cwd: lastCwd })
-      initSessionState(stored.id, ownerProject.id)
-      return window.api.createTerminal({ id: stored.id, name, cwd: lastCwd, projectId: ownerProject.id })
-        .then(() => setActiveSessionId(stored.id))
-    }).catch((err) => console.error('Failed to add session:', err))
+    const cwd = sessionStates[activeSessionId]?.currentCwd ?? primaryConfig?.cwd ?? '~'
+    const name = cwd.split('/').filter(Boolean).pop() ?? 'runner'
+    window.api.addSessionToStore(ownerProject.id, { name, cwd, parentSessionId: sessionId })
+      .then((stored) => {
+        addSessionToProject(ownerProject.id, { id: stored.id, name, cwd, parentSessionId: sessionId })
+        initSessionState(stored.id, ownerProject.id)
+        return window.api.createTerminal({ id: stored.id, name, cwd, projectId: ownerProject.id })
+          .then(() => setActiveSessionId(stored.id))
+      })
+      .catch((err) => console.error('Failed to create runner:', err))
+  }
+
+  const handleRemoveRunner = async (id: string): Promise<void> => {
+    if (!ownerProject) return
+    if (activeSessionId === id) setActiveSessionId(sessionId)
+    await window.api.destroyTerminal(id).catch(() => {})
+    await window.api.removeSessionFromStore(ownerProject.id, id).catch(() => {})
+    removeSessionFromProject(ownerProject.id, id)
   }
 
   useEffect(() => {
@@ -208,46 +230,27 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
   }, [activeSessionId])
 
   const status = sessionState?.status ?? 'running'
-  const displayName = activeConfig?.name ?? activeSessionId
-  const liveCwd = sessionState?.currentCwd ?? activeConfig?.cwd ?? ''
-  const displayCwd = liveCwd
+  const activeLiveCwd = sessionState?.currentCwd
+  const activeCwd = activeLiveCwd
+    ?? (activeSessionId === sessionId ? primaryConfig?.cwd : runners.find(r => r.id === activeSessionId)?.cwd)
+    ?? ''
+  const displayName = activeCwd.split('/').filter(Boolean).pop()
+    ?? (activeSessionId === sessionId ? primaryConfig?.name : 'runner')
+    ?? activeSessionId
+  const displayCwd = activeCwd
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
+
+  // Sidebar label helpers
+  const primaryLiveCwd = sessionStates[sessionId]?.currentCwd ?? primaryConfig?.cwd ?? ''
+  const primaryLabel = primaryLiveCwd.split('/').filter(Boolean).pop() ?? primaryConfig?.name ?? 'Terminal'
+  const primarySublabel = primaryLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
 
   return (
     <div
       className="absolute inset-0 bg-bg-base flex z-10"
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
-      {/* Left sidebar */}
-      <aside className="w-44 flex-shrink-0 flex flex-col border-r border-border-subtle bg-bg-card overflow-hidden">
-        <div className="px-2 py-1.5 border-b border-border-subtle flex-shrink-0">
-          <span className="text-xs text-text-muted uppercase tracking-wider">
-            {ownerProject?.name ?? 'Sessions'}
-          </span>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {siblings.map((s) => (
-            <SidebarItem
-              key={s.id}
-              session={s}
-              runtimeState={sessionStates[s.id]}
-              isActive={s.id === activeSessionId}
-              onClick={() => handleSwitchSession(s.id)}
-            />
-          ))}
-        </div>
-        <div className="flex-shrink-0 border-t border-border-subtle p-1">
-          <button
-            onClick={handleAddSession}
-            className="w-full text-xs text-text-muted hover:text-accent-green transition-colors py-1 text-left px-2 rounded hover:bg-bg-overlay"
-            title="New terminal in same folder"
-          >
-            + Terminal
-          </button>
-        </div>
-      </aside>
-
       {/* Main terminal area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
@@ -322,6 +325,46 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
           </button>
         </div>
       </div>
+
+      {/* Right sidebar */}
+      <aside className="w-44 flex-shrink-0 flex flex-col border-l border-border-subtle bg-bg-card overflow-hidden">
+        <SidebarItem
+          label={primaryLabel}
+          sublabel={primarySublabel !== primaryLabel ? primarySublabel : undefined}
+          runtimeState={sessionStates[sessionId]}
+          isActive={activeSessionId === sessionId}
+          isPrimary
+          onClick={() => handleSwitchSession(sessionId)}
+        />
+
+        <div className="flex items-center justify-between px-2 py-1 border-b border-border-subtle">
+          <span className="text-[10px] text-text-muted uppercase tracking-wider">Runners</span>
+          <button
+            onClick={handleAddRunner}
+            className="text-xs text-text-muted hover:text-accent-green transition-colors leading-none px-1 rounded hover:bg-bg-overlay"
+            title="Open a runner terminal in the same directory"
+          >
+            +
+          </button>
+        </div>
+
+        {runners.map((r) => {
+          const rLiveCwd = sessionStates[r.id]?.currentCwd ?? r.cwd
+          const rLabel = rLiveCwd.split('/').filter(Boolean).pop() ?? 'runner'
+          const rSublabel = rLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
+          return (
+            <SidebarItem
+              key={r.id}
+              label={rLabel}
+              sublabel={rSublabel !== rLabel ? rSublabel : undefined}
+              runtimeState={sessionStates[r.id]}
+              isActive={activeSessionId === r.id}
+              onClick={() => handleSwitchSession(r.id)}
+              onRemove={() => handleRemoveRunner(r.id)}
+            />
+          )
+        })}
+      </aside>
     </div>
   )
 }

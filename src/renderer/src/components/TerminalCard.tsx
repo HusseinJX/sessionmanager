@@ -71,6 +71,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
   const inputWaiting = runtimeState?.inputWaiting ?? false
   const hasNewOutput = runtimeState?.hasNewOutput ?? false
   const liveCwd = runtimeState?.currentCwd ?? session.cwd
+  const liveDisplayName = liveCwd.split('/').filter(Boolean).pop() ?? session.name
 
   const handleRemove = async (e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
@@ -128,7 +129,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
         onClick={() => setExpandedSession(session.id)}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-text-primary truncate">{session.name}</span>
+          <span className="text-sm font-medium text-text-primary truncate">{liveDisplayName}</span>
           {hasNewOutput && (
             <span className="w-1.5 h-1.5 rounded-full bg-accent-blue flex-shrink-0" title="New output" />
           )}

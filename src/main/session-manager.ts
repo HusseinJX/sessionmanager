@@ -1,8 +1,10 @@
 import * as os from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
+import { execFile } from 'child_process'
 import { EventEmitter } from 'events'
 import { BrowserWindow, Notification } from 'electron'
+import { updateSessionCwd } from './store'
 
 // Use a runtime require to load node-pty so Vite/Rollup doesn't try to bundle
 // the native addon (.node file). The /* @vite-ignore */ comment suppresses the
@@ -46,19 +48,19 @@ interface PtySession {
   activityBytes: number  // bytes received since last idle-fire or writeToSession
   hadInput: boolean      // true after first real input (user or launch command)
   currentCwd?: string    // live cwd from OSC 7 sequences
+  pendingInputCheck: boolean  // true while async process-state check is in flight
 }
 
 // Idle-based input-waiting detection: if a running session receives >= this
-// many bytes and then goes silent for IDLE_MS, it's probably waiting for input.
-// Keeps false positives low (filters tiny shell redraws) while catching Claude
-// Code, Open Code, and any other TUI whose prompts don't match regex patterns.
-const IDLE_MS = 1000
+// many bytes and then goes silent for IDLE_MS, verify via OS process state
+// that the foreground program is genuinely blocked on stdin before alerting.
+const IDLE_MS = 1500
 const MIN_ACTIVITY_BYTES = 300
 
-// Heuristic: patterns that mean a process is waiting for specific user input.
-// Deliberately excludes shell prompts ($, %, #, >) — those fire after every
-// command and would cause constant false positives.
-const PROMPT_PATTERNS = [
+// High-confidence patterns — unambiguous input prompts that fire instantly
+// without needing process-state verification. Deliberately excludes broad
+// patterns like "ends with ?" or "ends with :" which cause false positives.
+const INSTANT_PROMPT_PATTERNS = [
   /\(y\/n\)\s*[?:]?\s*$/i,       // y/n confirmations — (y/N), (Y/n), (y/n)
   /\[y\/n\]\s*[?:]?\s*$/i,       // [y/n] style
   /\[Y\/n\]\s*[?:]?\s*$/i,
@@ -66,20 +68,52 @@ const PROMPT_PATTERNS = [
   /password[:\s]*$/i,            // password prompts
   /enter\s+passphrase/i,         // SSH passphrases
   />>>\s*$/,                     // Python REPL
-  /\?\s*$/,                      // ends with "?" (confirmation questions)
-  /:\s*$/,                       // ends with ":" (read prompts like "Enter name: ")
-  /^\s*[❯›>]\s+\S/,             // TUI selection cursor (Claude Code / inquirer menus)
   /\(Use arrow keys\)/i,         // inquirer multi-choice prompt
 ]
 
-function detectInputWaiting(output: string): boolean {
-  // Strip ANSI before matching — raw PTY output contains escape sequences
-  // that break end-of-line regex anchors
+function detectInstantPrompt(output: string): boolean {
   const stripped = stripAnsiForExport(output)
   const lastLine = stripped.split(/\r?\n/).filter((l) => l.trim()).pop() || ''
-  // The generic ":" pattern is kept short to avoid matching verbose log lines
-  if (/:\s*$/.test(lastLine) && lastLine.length > 80) return false
-  return PROMPT_PATTERNS.some((p) => p.test(lastLine))
+  return INSTANT_PROMPT_PATTERNS.some((p) => p.test(lastLine))
+}
+
+// ─── OS-level process state check ──────────────────────────────────────────
+// Walk the pty's process tree to the leaf child, then check if it's sleeping
+// in the foreground group (S+). When a process is blocked on read() from the
+// terminal it shows exactly this state. This is the hard gate that eliminates
+// false positives from idle detection.
+
+function getLeafPid(pid: number): Promise<number> {
+  return new Promise((resolve) => {
+    execFile('pgrep', ['-P', String(pid)], (err, stdout) => {
+      const children = stdout?.trim().split('\n').filter(Boolean).map(Number) ?? []
+      if (children.length === 0) return resolve(pid)
+      // Follow the last child — most recently spawned, typically the foreground program
+      getLeafPid(children[children.length - 1]).then(resolve)
+    })
+  })
+}
+
+function isProcessSleepingInForeground(pid: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-o', 'stat=', '-p', String(pid)], (err, stdout) => {
+      if (err) return resolve(false)
+      const stat = stdout.trim()
+      // S = sleeping, + = foreground process group
+      resolve(stat.includes('S') && stat.includes('+'))
+    })
+  })
+}
+
+async function isChildProcessWaitingForInput(shellPid: number): Promise<boolean> {
+  try {
+    const leafPid = await getLeafPid(shellPid)
+    // If the leaf IS the shell, it's just a shell prompt — not a tool asking a question
+    if (leafPid === shellPid) return false
+    return await isProcessSleepingInForeground(leafPid)
+  } catch {
+    return false
+  }
 }
 
 function stripAnsiForExport(str: string): string {
@@ -94,6 +128,35 @@ function stripAnsiForExport(str: string): string {
 function getDefaultShell(): string {
   if (process.platform === 'win32') return 'powershell.exe'
   return process.env.SHELL || '/bin/bash'
+}
+
+// Lazily-created temp dir containing zsh rc files that inject our OSC 7 hook
+let _zshIntegrationDir: string | null = null
+function getZshIntegrationDir(): string {
+  const dir = path.join(os.tmpdir(), 'sessionmanager-zsh-integration')
+  // Re-check even if cached — macOS temp-dir cleanup can purge our files
+  // while the directory survives (zsh keeps .zsh_history alive).
+  if (_zshIntegrationDir && fs.existsSync(path.join(dir, '.zshrc'))) return _zshIntegrationDir
+  fs.mkdirSync(dir, { recursive: true })
+  // .zshenv: use _SM_ORIG_ZDOTDIR set by the parent process (ZDOTDIR is already our dir here)
+  fs.writeFileSync(
+    path.join(dir, '.zshenv'),
+    '[[ -f "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshenv" ]] && source "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshenv"\n'
+  )
+  // .zprofile: source user's .zprofile for login shells
+  fs.writeFileSync(
+    path.join(dir, '.zprofile'),
+    '[[ -f "${_SM_ORIG_ZDOTDIR:-$HOME}/.zprofile" ]] && source "${_SM_ORIG_ZDOTDIR:-$HOME}/.zprofile" 2>/dev/null || true\n'
+  )
+  // .zshrc: source user's .zshrc then append our OSC 7 precmd hook
+  fs.writeFileSync(
+    path.join(dir, '.zshrc'),
+    '[[ -f "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshrc" ]] && source "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshrc" 2>/dev/null || true\n' +
+    '_sm_osc7() { printf "\\e]7;file://%s%s\\a" "${HOST:-$HOSTNAME}" "${PWD}"; }\n' +
+    'precmd_functions+=(_sm_osc7)\n'
+  )
+  _zshIntegrationDir = dir
+  return dir
 }
 
 function resolveHome(p: string): string {
@@ -161,18 +224,27 @@ export class SessionManager extends EventEmitter {
         session.batchBuffer = ''
         this.win.webContents.send('terminal:output', { id, data })
       }
-      // Idle-based input-waiting detection — catches TUI prompts (Claude Code,
-      // Open Code, etc.) that don't match simple regex patterns.
+      // Idle-based input-waiting detection — when idle conditions are met,
+      // verify via OS process state that the foreground program is genuinely
+      // blocked on stdin before alerting. This eliminates false positives from
+      // Claude pausing to think, long compilation output, etc.
       if (
         !session.inputWaiting &&
+        !session.pendingInputCheck &&
         session.hadInput &&
         session.meta.status === 'running' &&
         session.activityBytes >= MIN_ACTIVITY_BYTES &&
         now - session.lastOutputTime >= IDLE_MS
       ) {
-        session.inputWaiting = true
-        session.activityBytes = 0
-        this.emitInputWaiting(id, session)
+        session.pendingInputCheck = true
+        isChildProcessWaitingForInput(session.pty.pid).then((waiting) => {
+          session.pendingInputCheck = false
+          if (waiting && !session.inputWaiting) {
+            session.inputWaiting = true
+            session.activityBytes = 0
+            this.emitInputWaiting(id, session)
+          }
+        })
       }
     }
   }
@@ -193,13 +265,16 @@ export class SessionManager extends EventEmitter {
       args.push('-l') // login shell for full PATH
     }
 
-    const env = {
+    const isZsh = shell.endsWith('/zsh') || shell === 'zsh'
+    const env: Record<string, string | undefined> = {
       ...process.env,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       LANG: process.env.LANG || 'en_US.UTF-8',
-      // Signals zsh to emit OSC 7 (cwd notifications) on every prompt
-      TERM_PROGRAM: 'iTerm.app'
+    }
+    if (isZsh) {
+      env._SM_ORIG_ZDOTDIR = process.env.ZDOTDIR || os.homedir()
+      env.ZDOTDIR = getZshIntegrationDir()
     }
 
     const pty = nodePty.spawn(shell, args, {
@@ -216,6 +291,7 @@ export class SessionManager extends EventEmitter {
       outputBuffer: [],
       batchBuffer: '',
       inputWaiting: false,
+      pendingInputCheck: false,
       lastOutputTime: Date.now(),
       activityBytes: 0,
       hadInput: !!meta.command  // launch-command sessions count as having input
@@ -238,13 +314,13 @@ export class SessionManager extends EventEmitter {
       this.emit('output', meta.id, data)
 
       // OSC 7 — cwd notification: \e]7;file://hostname/path\a (or \e\ ST terminator)
-      // zsh emits this automatically when TERM_PROGRAM=iTerm.app is set
       const osc7 = data.match(/\x1b\]7;file:\/\/([^\x07\x1b]*)(?:\x07|\x1b\\)/)
       if (osc7) {
         try {
           const newCwd = decodeURIComponent(new URL('file://' + osc7[1]).pathname)
           if (newCwd && newCwd !== session.currentCwd) {
             session.currentCwd = newCwd
+            updateSessionCwd(meta.id, newCwd)  // persist so refresh restores last cwd
             if (this.win && !this.win.isDestroyed()) {
               this.win.webContents.send('terminal:cwd', { id: meta.id, cwd: newCwd })
             }
@@ -253,10 +329,11 @@ export class SessionManager extends EventEmitter {
         } catch { /* malformed URL — ignore */ }
       }
 
-      // Fast-path pattern detection (passwords, y/n, etc.)
+      // Fast-path pattern detection — only high-confidence patterns (passwords, y/n, etc.)
+      // Broad patterns (ends with ? or :) are handled by idle + process-state check instead.
       const recent = session.outputBuffer.slice(-5).join('')
       const wasWaiting = session.inputWaiting
-      const nowWaiting = detectInputWaiting(recent)
+      const nowWaiting = detectInstantPrompt(recent)
 
       if (!nowWaiting && wasWaiting) {
         session.inputWaiting = false
