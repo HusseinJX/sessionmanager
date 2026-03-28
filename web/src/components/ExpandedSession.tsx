@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '../store'
-import { sendInput, fetchHistory, resizeSession } from '../api'
+import { sendInput, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects } from '../api'
 
 function SidebarItem({
   label,
@@ -14,6 +14,7 @@ function SidebarItem({
   isActive,
   isPrimary,
   onClick,
+  onRemove,
 }: {
   label: string
   sublabel?: string
@@ -22,6 +23,7 @@ function SidebarItem({
   isActive: boolean
   isPrimary?: boolean
   onClick: () => void
+  onRemove?: () => void
 }) {
   const dotColor = inputWaiting
     ? 'bg-accent-red animate-ping'
@@ -45,6 +47,15 @@ function SidebarItem({
         {isPrimary && (
           <span className="text-[9px] text-text-muted/60 flex-shrink-0 uppercase tracking-wider">main</span>
         )}
+        {onRemove && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRemove() }}
+            className="opacity-0 group-hover/item:opacity-100 text-text-muted hover:text-accent-red transition-all text-xs leading-none flex-shrink-0"
+            title="Remove runner"
+          >
+            &times;
+          </button>
+        )}
       </div>
       {sublabel && (
         <div className="mt-0.5 pl-3 text-[10px] font-mono text-text-muted/60 truncate">{sublabel}</div>
@@ -63,9 +74,11 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     sessionStates,
     projects,
     config,
+    setProjects,
   } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -87,6 +100,29 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   const handleSwitchSession = (id: string) => {
     setActiveSessionId(id)
+    setSidebarOpen(false)
+  }
+
+  const handleAddRunner = async () => {
+    if (!ownerProject || !config) return
+    const cwd = sessionStates[activeSessionId]?.currentCwd ?? primarySession?.cwd ?? '~'
+    const name = cwd.split('/').filter(Boolean).pop() ?? 'runner'
+    const created = await createSession(config, ownerProject.id, {
+      name,
+      cwd,
+      parentSessionId: sessionId,
+    })
+    const updated = await fetchProjects(config)
+    setProjects(updated)
+    setActiveSessionId(created.id)
+  }
+
+  const handleRemoveRunner = async (runnerId: string) => {
+    if (!ownerProject || !config) return
+    if (activeSessionId === runnerId) setActiveSessionId(sessionId)
+    await deleteSession(config, ownerProject.id, runnerId)
+    const updated = await fetchProjects(config)
+    setProjects(updated)
   }
 
   // Mount xterm.js terminal
@@ -223,19 +259,19 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
       {/* Main terminal area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
-        <div className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border-subtle flex-shrink-0">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between px-2 sm:px-4 py-2 bg-bg-card border-b border-border-subtle flex-shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
-              className="text-text-muted hover:text-text-primary text-sm transition-colors px-2 py-1 rounded hover:bg-bg-overlay flex items-center gap-1"
+              className="text-text-muted hover:text-text-primary text-sm transition-colors px-1.5 sm:px-2 py-1 rounded hover:bg-bg-overlay flex items-center gap-1 flex-shrink-0"
               onClick={handleClose}
               title="Back to grid (Escape)"
             >
-              &larr; Back
+              &larr;<span className="hidden sm:inline"> Back</span>
             </button>
-            <div className="h-4 w-px bg-border-subtle" />
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-text-primary">{displayName}</span>
-              <span className="text-xs text-text-muted font-mono">{displayCwd}</span>
+            <div className="h-4 w-px bg-border-subtle flex-shrink-0" />
+            <div className="flex flex-col min-w-0">
+              <span className="text-sm font-medium text-text-primary truncate">{displayName}</span>
+              <span className="text-xs text-text-muted font-mono truncate">{displayCwd}</span>
             </div>
           </div>
 
@@ -252,6 +288,18 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
                 running
               </span>
             )}
+            {/* Sidebar toggle — mobile only */}
+            <button
+              className="md:hidden text-text-muted hover:text-text-primary text-sm transition-colors w-7 h-7 flex items-center justify-center rounded hover:bg-bg-overlay"
+              onClick={() => setSidebarOpen((v) => !v)}
+              title="Toggle runners"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <line x1="2" y1="4" x2="14" y2="4" />
+                <line x1="2" y1="8" x2="14" y2="8" />
+                <line x1="2" y1="12" x2="14" y2="12" />
+              </svg>
+            </button>
             <button
               className="text-text-muted hover:text-accent-red text-lg leading-none transition-colors w-6 h-6 flex items-center justify-center rounded hover:bg-bg-overlay"
               onClick={handleClose}
@@ -271,8 +319,21 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
         />
       </div>
 
+      {/* Mobile sidebar backdrop */}
+      {sidebarOpen && (
+        <div
+          className="md:hidden absolute inset-0 bg-black/50 z-20"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Right sidebar */}
-      <aside className="w-44 flex-shrink-0 flex flex-col border-l border-border-subtle bg-bg-card overflow-hidden">
+      <aside className={`
+        w-44 flex-shrink-0 flex flex-col border-l border-border-subtle bg-bg-card overflow-hidden
+        md:relative md:translate-x-0
+        absolute right-0 top-0 bottom-0 z-30 transition-transform duration-200
+        ${sidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+      `}>
         <SidebarItem
           label={primaryLabel}
           sublabel={primarySublabel !== primaryLabel ? primarySublabel : undefined}
@@ -283,30 +344,35 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
           onClick={() => handleSwitchSession(sessionId)}
         />
 
-        {runners.length > 0 && (
-          <>
-            <div className="flex items-center justify-between px-2 py-1 border-b border-border-subtle">
-              <span className="text-[10px] text-text-muted uppercase tracking-wider">Runners</span>
-            </div>
-            {runners.map((r) => {
-              const rState = sessionStates[r.id]
-              const rLiveCwd = rState?.currentCwd ?? r.cwd
-              const rLabel = rLiveCwd.split('/').filter(Boolean).pop() ?? 'runner'
-              const rSublabel = rLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
-              return (
-                <SidebarItem
-                  key={r.id}
-                  label={rLabel}
-                  sublabel={rSublabel !== rLabel ? rSublabel : undefined}
-                  status={rState?.status ?? 'running'}
-                  inputWaiting={rState?.inputWaiting ?? false}
-                  isActive={activeSessionId === r.id}
-                  onClick={() => handleSwitchSession(r.id)}
-                />
-              )
-            })}
-          </>
-        )}
+        <div className="flex items-center justify-between px-2 py-1 border-b border-border-subtle">
+          <span className="text-[10px] text-text-muted uppercase tracking-wider">Runners</span>
+          <button
+            onClick={handleAddRunner}
+            className="text-xs text-text-muted hover:text-accent-green transition-colors leading-none px-1 rounded hover:bg-bg-overlay"
+            title="Open a runner terminal in the same directory"
+          >
+            +
+          </button>
+        </div>
+
+        {runners.map((r) => {
+          const rState = sessionStates[r.id]
+          const rLiveCwd = rState?.currentCwd ?? r.cwd
+          const rLabel = rLiveCwd.split('/').filter(Boolean).pop() ?? 'runner'
+          const rSublabel = rLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
+          return (
+            <SidebarItem
+              key={r.id}
+              label={rLabel}
+              sublabel={rSublabel !== rLabel ? rSublabel : undefined}
+              status={rState?.status ?? 'running'}
+              inputWaiting={rState?.inputWaiting ?? false}
+              isActive={activeSessionId === r.id}
+              onClick={() => handleSwitchSession(r.id)}
+              onRemove={() => handleRemoveRunner(r.id)}
+            />
+          )
+        })}
       </aside>
     </div>
   )

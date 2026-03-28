@@ -1,0 +1,34 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - SM_DATA_DIR=/data
+      - SM_TOKEN=${SM_TOKEN}
+    volumes:
+      - sm-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  sm-data:
+  caddy-data:
+  caddy-config:

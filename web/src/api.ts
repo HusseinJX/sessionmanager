@@ -82,7 +82,7 @@ export async function createProject(config: ServerConfig, name: string): Promise
 export async function createSession(
   config: ServerConfig,
   projectId: string,
-  session: { name: string; cwd: string; command?: string }
+  session: { name: string; cwd: string; command?: string; parentSessionId?: string }
 ): Promise<SessionStatus> {
   const res = await fetch(`${config.url}/api/projects/${encodeURIComponent(projectId)}/sessions`, {
     method: 'POST',

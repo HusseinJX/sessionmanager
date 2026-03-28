@@ -3,6 +3,10 @@ import { createSession, createProject, fetchProjects } from '../api'
 import TerminalCard from './TerminalCard'
 
 function getGridTemplate(layoutMode: string): string {
+  // On mobile (<640px), always single column
+  if (typeof window !== 'undefined' && window.innerWidth < 640) {
+    return '1fr'
+  }
   switch (layoutMode) {
     case '1': return 'repeat(1, 1fr)'
     case '2': return 'repeat(2, 1fr)'
@@ -71,9 +75,9 @@ export default function TerminalGrid() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-4">
+    <div className="h-full overflow-y-auto p-2 sm:p-4">
       <div
-        className="grid gap-3"
+        className="grid gap-2 sm:gap-3"
         style={{ gridTemplateColumns: getGridTemplate(layoutMode) }}
       >
         {sessions.map((session) => (

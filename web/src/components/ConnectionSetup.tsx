@@ -19,7 +19,7 @@ export default function ConnectionSetup({ onConnect, error }: ConnectionSetupPro
     <div className="flex items-center justify-center h-screen bg-bg-base">
       <form
         onSubmit={handleSubmit}
-        className="flex flex-col gap-4 p-6 bg-bg-card border border-border-subtle rounded-lg w-[360px]"
+        className="flex flex-col gap-4 p-6 bg-bg-card border border-border-subtle rounded-lg w-full max-w-[360px] mx-4"
       >
         <h1 className="text-lg font-semibold text-text-primary">Session Manager</h1>
         <p className="text-sm text-text-muted -mt-2">Enter your API token to connect</p>

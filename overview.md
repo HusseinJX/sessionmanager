@@ -370,3 +370,66 @@ Terminal cards (grid view and expanded view) now show the **live current working
 Works out of the box for zsh. Bash users would need `PROMPT_COMMAND` configured manually (not injected).
 
 **Files changed:** `src/main/session-manager.ts`, `src/main/http-server.ts`, `src/preload/index.ts`, `src/renderer/src/store/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/components/TerminalCard.tsx`, `src/renderer/src/components/FullTerminal.tsx`, `web/src/types.ts`, `web/src/App.tsx`, `web/src/components/SessionCard.tsx`
+
+---
+
+## Checkpoint 17 — Web UI rebuilt to mirror Electron app
+
+Complete rewrite of the `web/` companion UI to match the Electron app's layout and feature set. The old web UI was a simplified dashboard with flat session cards grouped by project — now it mirrors the full Electron experience.
+
+**New web UI architecture:**
+- **Zustand store** (`web/src/store/index.ts`) — mirrors the Electron renderer store with `SessionRuntimeState`, project/session management, SSE-driven updates, preview line building with ANSI stripping
+- **ProjectTabs** — horizontal project tabs with input-waiting red ping indicators, layout mode toggle (auto/1/2/3 columns), disconnect button
+- **TerminalGrid** — responsive grid matching Electron's `gridTemplateColumns` logic
+- **TerminalCard** — live cwd display, status badges (running/exited/needs input with red ping), preview lines, inline command input bar
+- **ExpandedSession** — full-screen overlay with scrollable log output, command input, right sidebar showing primary session + runners (via `parentSessionId`), escape to close
+- **ConnectionSetup** — clean connect form with URL + token fields
+
+**Server-side addition:**
+- `GET /api/projects` endpoint added to `http-server.ts` — returns full project structure from electron-store cross-referenced with live session status, including `parentSessionId` for runner support
+- Web API client (`api.ts`) tries `/api/projects` first, falls back to `/api/status` grouping for backwards compatibility with older server versions
+
+**Styling:** Tailwind config now uses the same GitHub Dark color tokens as the Electron app (`bg-base`, `bg-card`, `accent-green`, `accent-red`, etc.)
+
+**Files changed:** `src/main/http-server.ts`, `web/tailwind.config.js`, `web/src/index.css`, `web/src/types.ts`, `web/src/api.ts`, `web/src/store/index.ts` (new), `web/src/App.tsx`, `web/src/components/ConnectionSetup.tsx`, `web/src/components/ProjectTabs.tsx` (new), `web/src/components/TerminalGrid.tsx` (new), `web/src/components/TerminalCard.tsx` (new), `web/src/components/ExpandedSession.tsx`
+**Files removed:** `web/src/components/Dashboard.tsx`, `web/src/components/ProjectGroup.tsx`, `web/src/components/SessionCard.tsx`
+
+---
+
+## Checkpoint 18 — Bare-metal droplet deployment
+
+Deployed the server to a regular DigitalOcean droplet (`64.23.191.7`, Ubuntu 24.04, s-1vcpu-2gb, SFO3) running bare-metal Node.js (not Docker/App Platform).
+
+**Stack on droplet:**
+- Node.js 20 running `server/dist/index.js` on port 8080
+- Caddy reverse proxy on port 80 → 8080 (auto-HTTPS ready when a domain is pointed)
+- systemd service (`sessionmanager.service`) with auto-restart
+- UFW firewall: SSH + 80 only
+- Data persisted to `/var/lib/sessionmanager/data.json`
+- Auth token stored in systemd environment
+
+**Deployment files added:**
+- `docker-compose.yml` — alternative Docker-based deployment (Caddy + app)
+- `deploy/Caddyfile` — Caddy reverse proxy config
+- `deploy/setup.sh` — one-shot droplet provisioning script
+
+---
+
+## Checkpoint 19 — Mobile-friendly web UI + runner management
+
+Made the web UI responsive for mobile and added runner add/remove to the expanded view sidebar.
+
+**Mobile responsiveness:**
+- `ConnectionSetup` — fluid width form with `max-w-[360px]` instead of fixed
+- `ProjectTabs` — "Disconnect" text hidden on mobile, shows `×` icon
+- `TerminalGrid` — forced single column on `<640px`, tighter padding/gaps
+- `TerminalCard` — preview height 120px on mobile (180px desktop)
+- `ExpandedSession` toolbar — compact padding, "Back" text hidden (just `←`), truncated names
+- `ExpandedSession` sidebar — hidden off-screen on mobile, slides in as overlay via hamburger menu button (top right), backdrop dismisses it
+
+**Runner management (both mobile + desktop):**
+- Runners header with `+` button always visible in sidebar (creates runner in current cwd, auto-switches to it)
+- Remove `×` button on each runner item (appears on hover)
+- Server `POST /api/projects/:id/sessions` now accepts `parentSessionId`
+
+**Files changed:** `server/src/http-server.ts`, `web/src/api.ts`, `web/src/components/ConnectionSetup.tsx`, `web/src/components/ExpandedSession.tsx`, `web/src/components/ProjectTabs.tsx`, `web/src/components/TerminalCard.tsx`, `web/src/components/TerminalGrid.tsx`

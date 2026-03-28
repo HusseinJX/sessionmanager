@@ -172,10 +172,10 @@ export class HttpApiServer {
     if (req.method === 'POST' && sessionCreateMatch) {
       this.readBody(req).then((body) => {
         try {
-          const { name, cwd, command } = JSON.parse(body) as { name: string; cwd: string; command?: string }
+          const { name, cwd, command, parentSessionId } = JSON.parse(body) as { name: string; cwd: string; command?: string; parentSessionId?: string }
           if (!name || !cwd) return this.json(res, 400, { error: 'name and cwd required' })
           const projectId = sessionCreateMatch[1]
-          const session = addSession(projectId, { name, cwd, command })
+          const session = addSession(projectId, { name, cwd, command, parentSessionId })
           const project = getProjects().find((p) => p.id === projectId)
           // Start the pty
           this.sessionManager.createSession({

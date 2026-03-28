@@ -107,7 +107,8 @@ export default function ProjectTabs() {
         onClick={disconnect}
         title="Disconnect"
       >
-        Disconnect
+        <span className="hidden sm:inline">Disconnect</span>
+        <span className="sm:hidden">&times;</span>
       </button>
     </div>
   )

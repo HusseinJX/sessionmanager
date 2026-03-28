@@ -105,7 +105,7 @@ export default function TerminalCard({ session }: TerminalCardProps) {
       {/* Log preview */}
       <div
         className="cursor-pointer px-2 py-1.5 flex-1"
-        style={{ height: 180, background: '#0d1117', overflow: 'hidden' }}
+        style={{ height: window.innerWidth < 640 ? 120 : 180, background: '#0d1117', overflow: 'hidden' }}
         onClick={() => setExpandedSession(session.id)}
       >
         <div className="space-y-px">
