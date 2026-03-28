@@ -553,3 +553,26 @@ ssh root@64.23.191.7 "journalctl -u sessionmanager -n 15 --no-pager"
 - `SessionName: command` — send a command to a session by name
 
 **Verified working:** `/status` returns session list, bot responds in Telegram.
+
+---
+
+## Checkpoint 24 — Telegram backlog: add tasks via bot
+
+Extended the Telegram bot and server to support adding backlog items from Telegram.
+
+**Telegram bot commands:**
+- `/backlog task title` — adds a task to the first project's backlog
+- `/backlog projectName: task title` — adds to a specific project's backlog
+- `/backlog` (no args) — shows usage and lists available projects
+
+**Server store updates (`server/src/store.ts`):**
+- Added `TaskItem` type, `TaskStatus` type, and `tasks[]` to `ProjectConfig` (mirrors the Electron store's data model)
+- Added `getTasksForProject()`, `addTask()`, `removeTask()` CRUD functions
+- Backfills `tasks` array for projects created before this feature
+
+**HTTP API endpoints (`server/src/http-server.ts`):**
+- `GET /api/projects/:id/tasks` — list all tasks for a project
+- `POST /api/projects/:id/tasks` — create a task (`{ title, description?, status? }`)
+- `DELETE /api/projects/:pid/tasks/:tid` — delete a task
+
+**Files changed:** `server/src/store.ts`, `server/src/http-server.ts`, `server/src/telegram-bot.ts`
