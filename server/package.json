@@ -10,10 +10,12 @@
   },
   "dependencies": {
     "node-pty": "^1.1.0",
+    "node-telegram-bot-api": "^0.67.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/node-telegram-bot-api": "^0.64.14",
     "@types/uuid": "^9.0.0",
     "ts-node": "^10.9.0",
     "typescript": "^5.5.4"

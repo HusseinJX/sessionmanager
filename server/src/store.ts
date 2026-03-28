@@ -20,6 +20,8 @@ export interface StoreData {
   projects: ProjectConfig[]
   serverToken: string
   serverPort: number
+  telegramBotToken?: string
+  telegramChatId?: string
 }
 
 const STORE_PATH = path.join(process.env.SM_DATA_DIR || process.cwd(), 'data.json')
@@ -96,6 +98,18 @@ export function removeSession(projectId: string, sessionId: string): void {
 
 export function removeProject(projectId: string): void {
   store().projects = store().projects.filter((p) => p.id !== projectId)
+  save()
+}
+
+export function getTelegramConfig(): { botToken?: string; chatId?: string } {
+  const s = store()
+  return { botToken: s.telegramBotToken, chatId: s.telegramChatId }
+}
+
+export function setTelegramConfig(botToken: string, chatId: string): void {
+  const s = store()
+  s.telegramBotToken = botToken
+  s.telegramChatId = chatId
   save()
 }
 

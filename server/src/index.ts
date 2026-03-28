@@ -1,6 +1,7 @@
 import { SessionManager } from './session-manager'
 import { HttpApiServer } from './http-server'
-import { getProjects, getServerToken, getServerPort } from './store'
+import { getProjects, getServerToken, getServerPort, getTelegramConfig } from './store'
+import { TelegramBridge } from './telegram-bot'
 
 const port = parseInt(process.env.PORT || String(getServerPort()), 10)
 const token = process.env.SM_TOKEN || getServerToken()
@@ -37,19 +38,26 @@ server.start().then(() => {
   console.log(`\nUse token above to authenticate.`)
 })
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('\nShutting down...')
-  sessionManager.killAll()
-  sessionManager.stop()
-  server.stop()
-  process.exit(0)
-})
+// Start Telegram bot if configured
+let telegramBridge: TelegramBridge | null = null
+const tgToken = process.env.TG_BOT_TOKEN || getTelegramConfig().botToken
+const tgChatId = process.env.TG_CHAT_ID || getTelegramConfig().chatId
+if (tgToken && tgChatId) {
+  telegramBridge = new TelegramBridge(sessionManager, { botToken: tgToken, chatId: tgChatId })
+  telegramBridge.start()
+  console.log('Telegram bot connected')
+} else {
+  console.log('Telegram not configured (set TG_BOT_TOKEN + TG_CHAT_ID env vars, or POST /api/telegram/config)')
+}
 
-process.on('SIGINT', () => {
+// Graceful shutdown
+function shutdown() {
   console.log('\nShutting down...')
+  telegramBridge?.stop()
   sessionManager.killAll()
   sessionManager.stop()
   server.stop()
   process.exit(0)
-})
+}
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)

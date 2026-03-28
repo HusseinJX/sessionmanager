@@ -2,7 +2,7 @@ import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig } from './store'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -299,6 +299,28 @@ export class HttpApiServer {
           this.json(res, 200, { ok: true })
         } catch {
           this.json(res, 400, { error: 'Invalid JSON body' })
+        }
+      })
+      return
+    }
+
+    // GET /api/telegram/config
+    if (req.method === 'GET' && urlPath === '/api/telegram/config') {
+      const cfg = getTelegramConfig()
+      this.json(res, 200, { botToken: cfg.botToken ? '***configured***' : null, chatId: cfg.chatId ?? null })
+      return
+    }
+
+    // POST /api/telegram/config — set bot token + chat ID
+    if (req.method === 'POST' && urlPath === '/api/telegram/config') {
+      this.readBody(req).then((body) => {
+        try {
+          const { botToken, chatId } = JSON.parse(body) as { botToken: string; chatId: string }
+          if (!botToken || !chatId) return this.json(res, 400, { error: 'botToken and chatId required' })
+          setTelegramConfig(botToken, chatId)
+          this.json(res, 200, { ok: true, note: 'Restart server to connect bot' })
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' })
         }
       })
       return
