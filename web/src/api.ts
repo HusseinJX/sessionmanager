@@ -117,6 +117,55 @@ export async function deleteSession(
   )
 }
 
+export async function sendInput(
+  config: ServerConfig,
+  sessionId: string,
+  data: string
+): Promise<void> {
+  await fetch(
+    `${config.url}/api/sessions/${encodeURIComponent(sessionId)}/input`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ data }),
+    }
+  )
+}
+
+export async function fetchHistory(
+  config: ServerConfig,
+  sessionId: string
+): Promise<string> {
+  const res = await fetch(
+    `${config.url}/api/sessions/${encodeURIComponent(sessionId)}/history`,
+    { headers: { Authorization: `Bearer ${config.token}` } }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.text()
+}
+
+export async function resizeSession(
+  config: ServerConfig,
+  sessionId: string,
+  cols: number,
+  rows: number
+): Promise<void> {
+  await fetch(
+    `${config.url}/api/sessions/${encodeURIComponent(sessionId)}/resize`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ cols, rows }),
+    }
+  )
+}
+
 export function sseUrl(config: ServerConfig): string {
   return `${config.url}/api/events?token=${encodeURIComponent(config.token)}`
 }

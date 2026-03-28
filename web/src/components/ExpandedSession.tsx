@@ -1,7 +1,10 @@
-import { useState, useEffect, useRef, KeyboardEvent } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '../store'
-import type { SessionStatus, ServerConfig } from '../types'
-import { sendCommand, fetchLogs } from '../api'
+import { sendInput, fetchHistory, resizeSession } from '../api'
 
 function SidebarItem({
   label,
@@ -63,62 +66,143 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
-  const [cmdInput, setCmdInput] = useState('')
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const autoScrollRef = useRef(true)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
+  const observerRef = useRef<ResizeObserver | null>(null)
+  const sseListenerRef = useRef<((e: MessageEvent<string>) => void) | null>(null)
+  const isLoadedRef = useRef(false)
 
   const ownerProject = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
   const primarySession = ownerProject?.sessions.find((s) => s.id === sessionId)
   const runners = ownerProject?.sessions.filter((s) => s.parentSessionId === sessionId) ?? []
 
   const sessionState = sessionStates[activeSessionId]
-  const logLines = sessionState?.logLines ?? []
   const status = sessionState?.status ?? 'running'
 
-  // Load initial logs for active session
+  const handleClose = useCallback(() => {
+    setExpandedSession(null)
+  }, [setExpandedSession])
+
+  const handleSwitchSession = (id: string) => {
+    setActiveSessionId(id)
+  }
+
+  // Mount xterm.js terminal
   useEffect(() => {
-    if (!config) return
-    fetchLogs(config, activeSessionId, 150)
-      .then((lines) => {
-        useAppStore.getState().setSessionLogs(activeSessionId, lines)
+    if (!containerRef.current || !config || isLoadedRef.current) return
+    isLoadedRef.current = true
+
+    const term = new Terminal({
+      scrollback: 5000,
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: '"Menlo", "Monaco", "Courier New", monospace',
+      fontSize: 13,
+      lineHeight: 1.4,
+      theme: {
+        background: '#0d1117',
+        foreground: '#e6edf3',
+        cursor: '#e6edf3',
+        cursorAccent: '#0d1117',
+        black: '#484f58',
+        red: '#ff7b72',
+        green: '#3fb950',
+        yellow: '#d29922',
+        blue: '#388bfd',
+        magenta: '#bc8cff',
+        cyan: '#39c5cf',
+        white: '#b1bac4',
+        brightBlack: '#6e7681',
+        brightRed: '#ffa198',
+        brightGreen: '#56d364',
+        brightYellow: '#e3b341',
+        brightBlue: '#79c0ff',
+        brightMagenta: '#d2a8ff',
+        brightCyan: '#56d4dd',
+        brightWhite: '#f0f6fc',
+        selectionBackground: '#264f78',
+        selectionForeground: '#e6edf3',
+      },
+    })
+
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    term.loadAddon(new WebLinksAddon())
+
+    term.open(containerRef.current)
+    terminalRef.current = term
+    fitAddonRef.current = fitAddon
+
+    // Send keystrokes to server
+    term.onData((data) => {
+      sendInput(config, activeSessionId, data).catch(() => {})
+    })
+
+    // Fit & resize
+    const doFit = () => {
+      if (!containerRef.current || !fitAddon || !term.element) return
+      try {
+        fitAddon.fit()
+        resizeSession(config, activeSessionId, term.cols, term.rows).catch(() => {})
+      } catch { /* ignore */ }
+    }
+
+    const observer = new ResizeObserver(() => doFit())
+    observer.observe(containerRef.current)
+    observerRef.current = observer
+
+    // Load history then subscribe to live SSE output
+    fetchHistory(config, activeSessionId)
+      .then((history) => {
+        if (history) term.write(history)
+        doFit()
       })
       .catch(() => {})
-  }, [activeSessionId, config])
 
-  // Auto-scroll
-  useEffect(() => {
-    if (autoScrollRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior })
+    // Listen to SSE output events for this session
+    // We tap into the existing EventSource via a custom event on window
+    // Instead, we'll create a secondary listener approach:
+    // The App.tsx SSE already calls appendOutput which updates the store.
+    // But for xterm.js we need the RAW data. We'll listen to the SSE directly.
+    const esUrl = `${config.url}/api/events?token=${encodeURIComponent(config.token)}`
+    const es = new EventSource(esUrl)
+
+    const handleOutput = (e: MessageEvent<string>) => {
+      const { sessionId: sid, data } = JSON.parse(e.data) as { sessionId: string; data: string }
+      if (sid === activeSessionId) {
+        term.write(data)
+      }
     }
-  }, [logLines])
+    es.addEventListener('output', handleOutput)
+
+    setTimeout(() => term.focus(), 50)
+
+    return () => {
+      es.removeEventListener('output', handleOutput)
+      es.close()
+      observer.disconnect()
+      try { fitAddon.dispose() } catch { /* ignore */ }
+      try { term.dispose() } catch { /* ignore */ }
+      terminalRef.current = null
+      fitAddonRef.current = null
+      isLoadedRef.current = false
+    }
+  }, [activeSessionId, config])
 
   // Escape to close
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setExpandedSession(null)
+      // Only close on Escape if the terminal doesn't have focus
+      // (so Escape can be used in terminal apps like vim)
+      if (e.key === 'Escape' && document.activeElement?.tagName !== 'TEXTAREA') {
+        handleClose()
+      }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setExpandedSession])
-
-  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget
-    autoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-  }
-
-  const handleClose = () => setExpandedSession(null)
-
-  const handleSendCommand = () => {
-    if (!cmdInput || !config) return
-    sendCommand(config, activeSessionId, cmdInput).catch(console.error)
-    setCmdInput('')
-  }
-
-  const handleCmdKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') handleSendCommand()
-    else if (e.key === 'Escape') handleClose()
-  }
+  }, [handleClose])
 
   const activeCwd = sessionState?.currentCwd
     ?? (activeSessionId === sessionId ? primarySession?.currentCwd ?? primarySession?.cwd : runners.find((r) => r.id === activeSessionId)?.cwd)
@@ -136,7 +220,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   return (
     <div className="absolute inset-0 bg-bg-base flex z-10">
-      {/* Main area */}
+      {/* Main terminal area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 bg-bg-card border-b border-border-subtle flex-shrink-0">
@@ -178,53 +262,13 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
           </div>
         </div>
 
-        {/* Log output */}
+        {/* xterm.js terminal */}
         <div
-          ref={scrollContainerRef}
-          className="flex-1 overflow-y-auto overflow-x-hidden p-3"
+          ref={containerRef}
+          className="flex-1 overflow-hidden p-1"
           style={{ background: '#0d1117' }}
-          onScroll={handleScroll}
-        >
-          <div className="space-y-px">
-            {logLines.length === 0 ? (
-              <span className="font-mono text-xs" style={{ color: '#484f58' }}>no output yet</span>
-            ) : (
-              logLines.map((line, i) => (
-                <div
-                  key={i}
-                  className="font-mono text-xs whitespace-pre-wrap break-words leading-relaxed"
-                  style={{ color: '#c9d1d9' }}
-                >
-                  {line}
-                </div>
-              ))
-            )}
-            <div ref={bottomRef} />
-          </div>
-        </div>
-
-        {/* Command input bar */}
-        <div className="flex items-center gap-2 px-3 py-2 bg-bg-card border-t border-border-subtle flex-shrink-0">
-          <span className="text-text-muted font-mono text-sm select-none">$</span>
-          <input
-            type="text"
-            value={cmdInput}
-            onChange={(e) => setCmdInput(e.target.value)}
-            onKeyDown={handleCmdKeyDown}
-            placeholder="Type a command and press Enter..."
-            className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-muted font-mono outline-none"
-            spellCheck={false}
-            autoComplete="off"
-            autoFocus
-          />
-          <button
-            onClick={handleSendCommand}
-            disabled={!cmdInput}
-            className="px-3 py-1 text-xs bg-bg-overlay border border-border-subtle rounded text-text-muted hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-30"
-          >
-            Send &crarr;
-          </button>
-        </div>
+          onClick={() => terminalRef.current?.focus()}
+        />
       </div>
 
       {/* Right sidebar */}
@@ -236,7 +280,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
           inputWaiting={sessionStates[sessionId]?.inputWaiting ?? false}
           isActive={activeSessionId === sessionId}
           isPrimary
-          onClick={() => { setActiveSessionId(sessionId); setCmdInput('') }}
+          onClick={() => handleSwitchSession(sessionId)}
         />
 
         {runners.length > 0 && (
@@ -257,7 +301,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
                   status={rState?.status ?? 'running'}
                   inputWaiting={rState?.inputWaiting ?? false}
                   isActive={activeSessionId === r.id}
-                  onClick={() => { setActiveSessionId(r.id); setCmdInput('') }}
+                  onClick={() => handleSwitchSession(r.id)}
                 />
               )
             })}

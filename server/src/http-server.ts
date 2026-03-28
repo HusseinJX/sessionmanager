@@ -259,6 +259,51 @@ export class HttpApiServer {
       return
     }
 
+    // POST /api/sessions/:id/input — send raw input (keystrokes, no \r appended)
+    const inputMatch = urlPath.match(/^\/api\/sessions\/([^/]+)\/input$/)
+    if (req.method === 'POST' && inputMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const { data } = JSON.parse(body) as { data?: string }
+          if (!data || typeof data !== 'string') {
+            return this.json(res, 400, { error: 'Body must contain a "data" string' })
+          }
+          const ok = this.sessionManager.writeToSession(inputMatch[1], data)
+          if (!ok) return this.json(res, 404, { error: 'Session not found' })
+          this.json(res, 200, { ok: true })
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON body' })
+        }
+      })
+      return
+    }
+
+    // GET /api/sessions/:id/history — raw output buffer for xterm.js replay
+    const historyMatch = urlPath.match(/^\/api\/sessions\/([^/]+)\/history$/)
+    if (req.method === 'GET' && historyMatch) {
+      const history = this.sessionManager.getHistory(historyMatch[1])
+      this.cors(res)
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end(history)
+      return
+    }
+
+    // POST /api/sessions/:id/resize
+    const resizeMatch = urlPath.match(/^\/api\/sessions\/([^/]+)\/resize$/)
+    if (req.method === 'POST' && resizeMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const { cols, rows } = JSON.parse(body) as { cols: number; rows: number }
+          if (!cols || !rows) return this.json(res, 400, { error: 'cols and rows required' })
+          this.sessionManager.resizeSession(resizeMatch[1], cols, rows)
+          this.json(res, 200, { ok: true })
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON body' })
+        }
+      })
+      return
+    }
+
     // Serve web UI static files
     this.serveStatic(urlPath, res)
   }
