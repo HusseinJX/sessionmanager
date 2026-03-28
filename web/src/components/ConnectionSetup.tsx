@@ -1,110 +1,70 @@
 import { useState } from 'react'
 import type { ServerConfig } from '../types'
 
-interface Props {
+interface ConnectionSetupProps {
   onConnect: (config: ServerConfig) => void
+  error?: string | null
 }
 
-export default function ConnectionSetup({ onConnect }: Props) {
-  const [url, setUrl] = useState('http://localhost:7543')
+export default function ConnectionSetup({ onConnect, error }: ConnectionSetupProps) {
+  const [url, setUrl] = useState('http://127.0.0.1:7543')
   const [token, setToken] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    setError(null)
-    setLoading(true)
-
-    const cfg: ServerConfig = {
-      url: url.replace(/\/$/, ''),
-      token: token.trim(),
-    }
-
-    try {
-      const res = await fetch(`${cfg.url}/api/status`, {
-        headers: { Authorization: `Bearer ${cfg.token}` },
-      })
-      if (res.status === 401) throw new Error('Invalid token')
-      if (!res.ok) throw new Error(`Server responded with ${res.status}`)
-      onConnect(cfg)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to connect')
-    } finally {
-      setLoading(false)
-    }
+    if (!url || !token) return
+    onConnect({ url: url.replace(/\/$/, ''), token })
   }
 
   return (
-    <div
-      className="min-h-screen flex items-center justify-center p-4"
-      style={{ background: '#0d1117' }}
-    >
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="text-3xl mb-3">⬡</div>
-          <h1 className="text-xl font-bold text-white">Session Manager</h1>
-          <p className="text-gray-500 text-sm mt-1">Connect to your remote instance</p>
-        </div>
+    <div className="flex items-center justify-center h-screen bg-bg-base">
+      <form
+        onSubmit={handleSubmit}
+        className="flex flex-col gap-4 p-6 bg-bg-card border border-border-subtle rounded-lg w-[360px]"
+      >
+        <h1 className="text-lg font-semibold text-text-primary">Session Manager</h1>
+        <p className="text-sm text-text-muted -mt-2">Connect to your running instance</p>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div
-            className="rounded-lg p-5 space-y-4"
-            style={{ background: '#161b22', border: '1px solid #30363d' }}
-          >
-            <div>
-              <label className="block text-xs text-gray-400 mb-1.5 uppercase tracking-wider font-medium">
-                Server URL
-              </label>
-              <input
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="http://192.168.1.100:7543"
-                required
-                className="w-full px-3 py-2 rounded text-sm text-white placeholder-gray-700"
-                style={{ background: '#0d1117', border: '1px solid #30363d' }}
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-400 mb-1.5 uppercase tracking-wider font-medium">
-                API Token
-              </label>
-              <input
-                type="password"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="Paste your server token"
-                required
-                className="w-full px-3 py-2 rounded text-sm text-white placeholder-gray-700"
-                style={{ background: '#0d1117', border: '1px solid #30363d' }}
-              />
-              <p className="text-xs text-gray-600 mt-1.5">
-                Find it in Session Manager → Settings → HTTP Server
-              </p>
-            </div>
+        {error && (
+          <div className="text-xs text-accent-red bg-accent-red/10 px-3 py-2 rounded">
+            {error}
           </div>
+        )}
 
-          {error && (
-            <p
-              className="text-xs px-3 py-2 rounded"
-              style={{ background: '#1f1412', color: '#f85149', border: '1px solid #da3633' }}
-            >
-              {error}
-            </p>
-          )}
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-text-muted">Server URL</span>
+          <input
+            type="text"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            className="bg-bg-base border border-border-subtle rounded px-3 py-2 text-sm text-text-primary placeholder-text-muted focus:border-accent-blue outline-none"
+            placeholder="http://127.0.0.1:7543"
+          />
+        </label>
 
-          <button
-            type="submit"
-            disabled={loading || !token.trim()}
-            className="w-full py-2.5 rounded font-medium text-sm transition-opacity disabled:opacity-40"
-            style={{ background: '#238636', color: '#fff' }}
-          >
-            {loading ? 'Connecting…' : 'Connect'}
-          </button>
-        </form>
-      </div>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-text-muted">API Token</span>
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            className="bg-bg-base border border-border-subtle rounded px-3 py-2 text-sm text-text-primary placeholder-text-muted focus:border-accent-blue outline-none font-mono"
+            placeholder="Paste token from Settings panel"
+          />
+        </label>
+
+        <button
+          type="submit"
+          disabled={!url || !token}
+          className="mt-1 px-4 py-2 bg-accent-green text-bg-base rounded text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-40"
+        >
+          Connect
+        </button>
+
+        <p className="text-xs text-text-muted mt-1">
+          Find the token in the Electron app: Settings &rarr; Server tab
+        </p>
+      </form>
     </div>
   )
 }

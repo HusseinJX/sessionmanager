@@ -1,5 +1,6 @@
 import * as http from 'http'
 import type { SessionManager } from './session-manager'
+import { getProjects } from './store'
 
 interface SseClient {
   id: number
@@ -118,6 +119,24 @@ export class HttpApiServer {
     // GET /api/status
     if (req.method === 'GET' && path === '/api/status') {
       this.json(res, 200, this.sessionManager.getAllSessionsStatus())
+      return
+    }
+
+    // GET /api/projects — full project structure from store
+    if (req.method === 'GET' && path === '/api/projects') {
+      const projects = getProjects()
+      const statuses = this.sessionManager.getAllSessionsStatus()
+      const statusMap = new Map(statuses.map((s) => [s.id, s]))
+      const result = projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        sessions: p.sessions.map((s) => ({
+          ...s,
+          ...(statusMap.get(s.id) ?? {}),
+          parentSessionId: s.parentSessionId
+        }))
+      }))
+      this.json(res, 200, result)
       return
     }
 
