@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useAppStore } from '../store'
 import { createProject, deleteProject, fetchProjects } from '../api'
 
@@ -24,9 +23,6 @@ export default function ProjectTabs() {
     disconnect,
   } = useAppStore()
 
-  const [showNewProject, setShowNewProject] = useState(false)
-  const [newProjectName, setNewProjectName] = useState('')
-
   const projectHasWaiting = (projectId: string): boolean =>
     Object.values(sessionStates).some((s) => s.projectId === projectId && s.inputWaiting)
 
@@ -36,12 +32,11 @@ export default function ProjectTabs() {
   }
 
   const handleCreateProject = async () => {
-    if (!config || !newProjectName.trim()) return
-    await createProject(config, newProjectName.trim())
+    if (!config) return
+    const count = projects.length
+    await createProject(config, `Project ${count + 1}`)
     const updated = await fetchProjects(config)
     setProjects(updated)
-    setNewProjectName('')
-    setShowNewProject(false)
   }
 
   const handleDeleteProject = async (e: React.MouseEvent, projectId: string) => {
@@ -87,45 +82,13 @@ export default function ProjectTabs() {
         )
       })}
 
-      {/* New project inline form */}
-      {showNewProject ? (
-        <form
-          className="flex items-center gap-1 px-2"
-          onSubmit={(e) => { e.preventDefault(); handleCreateProject() }}
-        >
-          <input
-            type="text"
-            value={newProjectName}
-            onChange={(e) => setNewProjectName(e.target.value)}
-            placeholder="Project name"
-            className="bg-bg-base border border-border-subtle rounded px-2 py-1 text-xs text-text-primary w-32 outline-none focus:border-accent-blue"
-            autoFocus
-            onKeyDown={(e) => { if (e.key === 'Escape') setShowNewProject(false) }}
-          />
-          <button
-            type="submit"
-            disabled={!newProjectName.trim()}
-            className="text-xs text-accent-green hover:opacity-80 disabled:opacity-40"
-          >
-            Add
-          </button>
-          <button
-            type="button"
-            className="text-xs text-text-muted hover:text-text-primary"
-            onClick={() => setShowNewProject(false)}
-          >
-            Cancel
-          </button>
-        </form>
-      ) : (
-        <button
-          className="px-2 py-1 text-sm text-text-muted hover:text-accent-green rounded hover:bg-bg-overlay transition-colors"
-          onClick={() => setShowNewProject(true)}
-          title="New project"
-        >
-          +
-        </button>
-      )}
+      <button
+        className="px-2 py-1 text-sm text-text-muted hover:text-accent-green rounded hover:bg-bg-overlay transition-colors"
+        onClick={handleCreateProject}
+        title="New project"
+      >
+        +
+      </button>
 
       <div className="flex-1" />
 
