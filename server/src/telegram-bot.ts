@@ -1,10 +1,13 @@
 import TelegramBot from 'node-telegram-bot-api'
+import OpenAI from 'openai'
+import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions'
 import type { SessionManager } from './session-manager'
-import { getProjects, addTask } from './store'
+import { getProjects, addTask, getTasksForProject } from './store'
 
 export interface TelegramConfig {
   botToken: string
   chatId: string
+  openaiApiKey?: string
 }
 
 /**
@@ -12,28 +15,121 @@ export interface TelegramConfig {
  */
 const messageToSession = new Map<number, string>()
 
+const SYSTEM_PROMPT = `You are SessionManager Bot — a concise assistant that manages terminal sessions and projects via Telegram.
+
+You have tools to check session status, read terminal output, send commands to terminals, and manage project backlogs. Use them to fulfill the user's requests.
+
+Rules:
+- Be concise. This is Telegram — short messages, no walls of text.
+- Use tools proactively. If the user asks "what's running", call get_status. If they say "send X to Y", call send_command.
+- When listing sessions or tasks, use clean formatting with emojis for status.
+- If a request is ambiguous, make your best guess from context rather than asking clarifying questions.
+- When sending commands, always confirm what you sent and to which session.
+- For backlog items, if no project is specified and there's only one project, use that one.`
+
+const tools: ChatCompletionTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'get_status',
+      description: 'Get the status of all active terminal sessions including their name, status (running/exited), whether they are waiting for input, current working directory, and last few lines of output.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_projects',
+      description: 'List all projects with their sessions and task counts.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_session_logs',
+      description: 'Read the last N lines of output from a specific terminal session.',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: { type: 'string', description: 'The session ID' },
+          lines: { type: 'number', description: 'Number of lines to retrieve (default 20, max 100)' },
+        },
+        required: ['session_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_command',
+      description: 'Send a command or text input to a terminal session. The command will be followed by a carriage return (Enter key).',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: { type: 'string', description: 'The session ID to send to' },
+          command: { type: 'string', description: 'The command or text to send' },
+        },
+        required: ['session_id', 'command'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'add_backlog_item',
+      description: 'Add a task to a project\'s backlog.',
+      parameters: {
+        type: 'object',
+        properties: {
+          project_id: { type: 'string', description: 'The project ID to add the task to' },
+          title: { type: 'string', description: 'Task title' },
+          description: { type: 'string', description: 'Optional task description' },
+        },
+        required: ['project_id', 'title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_tasks',
+      description: 'List all tasks for a project, grouped by status (backlog, todo, in-progress, done).',
+      parameters: {
+        type: 'object',
+        properties: {
+          project_id: { type: 'string', description: 'The project ID' },
+        },
+        required: ['project_id'],
+      },
+    },
+  },
+]
+
 export class TelegramBridge {
   private bot: TelegramBot | null = null
   private sessionManager: SessionManager
   private chatId: string
   private botToken: string
+  private openai: OpenAI | null = null
 
   constructor(sessionManager: SessionManager, config: TelegramConfig) {
     this.sessionManager = sessionManager
     this.botToken = config.botToken
     this.chatId = config.chatId
+    if (config.openaiApiKey) {
+      this.openai = new OpenAI({ apiKey: config.openaiApiKey })
+    }
   }
 
   start(): void {
     this.bot = new TelegramBot(this.botToken, { polling: true })
 
-    // Handle replies to input-waiting messages
     this.bot.on('message', (msg) => {
-      // Only accept messages from the configured chat
       if (String(msg.chat.id) !== this.chatId) return
       if (!msg.text) return
 
-      // If it's a reply to one of our messages, route to that session
+      // Reply to an input-waiting notification → route directly to terminal
       if (msg.reply_to_message) {
         const sessionId = messageToSession.get(msg.reply_to_message.message_id)
         if (sessionId) {
@@ -45,43 +141,11 @@ export class TelegramBridge {
         }
       }
 
-      // Slash commands
-      if (msg.text === '/status') {
-        this.sendStatus(msg.chat.id)
-        return
-      }
-
-      if (msg.text === '/waiting') {
-        this.sendWaiting(msg.chat.id)
-        return
-      }
-
-      if (msg.text === '/help') {
-        this.sendHelp(msg.chat.id)
-        return
-      }
-
-      if (msg.text?.startsWith('/backlog')) {
-        this.handleBacklog(msg.chat.id, msg.text.slice('/backlog'.length).trim())
-        return
-      }
-
-      // Direct send: "sessionName: command"
-      const colonIdx = msg.text.indexOf(':')
-      if (colonIdx > 0) {
-        const targetName = msg.text.slice(0, colonIdx).trim().toLowerCase()
-        const command = msg.text.slice(colonIdx + 1).trim()
-        if (command) {
-          const sessions = this.sessionManager.getAllSessionsStatus()
-          const match = sessions.find(
-            (s) => s.name.toLowerCase() === targetName || s.id === targetName
-          )
-          if (match) {
-            this.sessionManager.writeToSession(match.id, command + '\r')
-            this.bot?.sendMessage(msg.chat.id, `Sent to *${match.name}*`, { parse_mode: 'Markdown' })
-            return
-          }
-        }
+      // Everything else goes through the LLM
+      if (this.openai) {
+        this.handleWithLlm(msg.chat.id, msg.text)
+      } else {
+        this.bot?.sendMessage(msg.chat.id, 'LLM not configured. Set OPENAI_API_KEY to enable natural language commands.')
       }
     })
 
@@ -97,6 +161,130 @@ export class TelegramBridge {
     if (this.bot) {
       this.bot.stopPolling()
       this.bot = null
+    }
+  }
+
+  private async handleWithLlm(chatId: number | string, userMessage: string): Promise<void> {
+    if (!this.openai || !this.bot) return
+
+    const messages: ChatCompletionMessageParam[] = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userMessage },
+    ]
+
+    try {
+      // Tool-use loop: keep calling until the model produces a final text response
+      for (let i = 0; i < 5; i++) {
+        const response = await this.openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages,
+          tools,
+        })
+
+        const choice = response.choices[0]
+        if (!choice.message) break
+
+        messages.push(choice.message)
+
+        // If no tool calls, we have the final response
+        if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
+          const text = choice.message.content
+          if (text) {
+            await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' })
+          }
+          return
+        }
+
+        // Execute each tool call
+        for (const toolCall of choice.message.tool_calls) {
+          if (toolCall.type !== 'function') continue
+          const args = JSON.parse(toolCall.function.arguments || '{}')
+          const result = await this.executeTool(toolCall.function.name, args)
+          messages.push({
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: JSON.stringify(result),
+          })
+        }
+      }
+
+      // If we exhausted the loop without a text response
+      await this.bot.sendMessage(chatId, 'Done.')
+    } catch (err) {
+      console.error('LLM error:', err)
+      await this.bot.sendMessage(chatId, `Error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  private async executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    switch (name) {
+      case 'get_status': {
+        const sessions = this.sessionManager.getAllSessionsStatus()
+        return sessions.map((s) => ({
+          id: s.id,
+          name: s.name,
+          status: s.status,
+          inputWaiting: s.inputWaiting,
+          cwd: s.currentCwd ?? s.cwd,
+          exitCode: s.exitCode,
+          recentLines: s.recentLines,
+          projectName: s.projectName,
+        }))
+      }
+
+      case 'get_projects': {
+        const projects = getProjects()
+        return projects.map((p) => ({
+          id: p.id,
+          name: p.name,
+          sessionCount: p.sessions.length,
+          sessions: p.sessions.map((s) => ({ id: s.id, name: s.name })),
+          taskCount: (p.tasks ?? []).length,
+        }))
+      }
+
+      case 'get_session_logs': {
+        const id = args.session_id as string
+        const n = Math.min((args.lines as number) || 20, 100)
+        const lines = this.sessionManager.getRecentLines(id, n)
+        if (lines === null) return { error: 'Session not found' }
+        return { sessionId: id, lines }
+      }
+
+      case 'send_command': {
+        const id = args.session_id as string
+        const cmd = args.command as string
+        const ok = this.sessionManager.writeToSession(id, cmd + '\r')
+        if (!ok) return { error: 'Session not found' }
+        return { ok: true, sessionId: id, command: cmd }
+      }
+
+      case 'add_backlog_item': {
+        const projectId = args.project_id as string
+        const title = args.title as string
+        const description = (args.description as string) || ''
+        try {
+          const task = addTask(projectId, { title, description, status: 'backlog' })
+          return { ok: true, taskId: task.id, title: task.title }
+        } catch (err) {
+          return { error: String(err) }
+        }
+      }
+
+      case 'get_tasks': {
+        const projectId = args.project_id as string
+        const tasks = getTasksForProject(projectId)
+        return tasks.map((t) => ({
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          description: t.description || undefined,
+          command: t.command || undefined,
+        }))
+      }
+
+      default:
+        return { error: `Unknown tool: ${name}` }
     }
   }
 
@@ -130,7 +318,6 @@ export class TelegramBridge {
       })
       messageToSession.set(sent.message_id, sessionId)
 
-      // Clean up old mappings (keep last 200)
       if (messageToSession.size > 200) {
         const keys = [...messageToSession.keys()]
         for (let i = 0; i < keys.length - 200; i++) {
@@ -139,109 +326,6 @@ export class TelegramBridge {
       }
     } catch (err) {
       console.error('Telegram send error:', err)
-    }
-  }
-
-  private async sendHelp(chatId: number | string): Promise<void> {
-    const text = [
-      '*Commands:*',
-      '`/status` — list all sessions',
-      '`/waiting` — resend input notifications',
-      '`/backlog task title` — add to backlog',
-      '`/backlog project: title` — add to specific project',
-      '`/help` — this message',
-      '',
-      '*Direct input:*',
-      '`sessionName: command` — send to a session',
-      'Reply to a notification — send input to that terminal',
-    ].join('\n')
-    this.bot?.sendMessage(chatId, text, { parse_mode: 'Markdown' })
-  }
-
-  private async sendStatus(chatId: number | string): Promise<void> {
-    const sessions = this.sessionManager.getAllSessionsStatus()
-    if (sessions.length === 0) {
-      this.bot?.sendMessage(chatId, 'No active sessions.')
-      return
-    }
-
-    const lines = sessions.map((s) => {
-      const icon = s.inputWaiting ? '\u26a0\ufe0f' : s.status === 'running' ? '\u2705' : '\u274c'
-      return `${icon} *${escapeMarkdown(s.name)}* \u2014 ${s.status}${s.inputWaiting ? ' (waiting)' : ''}`
-    })
-    this.bot?.sendMessage(chatId, lines.join('\n'), { parse_mode: 'Markdown' })
-  }
-
-  private async handleBacklog(chatId: number | string, text: string): Promise<void> {
-    const projects = getProjects()
-    if (projects.length === 0) {
-      this.bot?.sendMessage(chatId, 'No projects found.')
-      return
-    }
-
-    if (!text) {
-      // Show usage + list projects
-      const names = projects.map((p) => `• *${escapeMarkdown(p.name)}*`).join('\n')
-      this.bot?.sendMessage(
-        chatId,
-        `Usage: \`/backlog task title\` or \`/backlog project: task title\`\n\nProjects:\n${names}`,
-        { parse_mode: 'Markdown' }
-      )
-      return
-    }
-
-    let projectId: string
-    let projectName: string
-    let title: string
-
-    // Check for "projectName: task title" syntax
-    const colonIdx = text.indexOf(':')
-    if (colonIdx > 0) {
-      const targetName = text.slice(0, colonIdx).trim().toLowerCase()
-      const match = projects.find((p) => p.name.toLowerCase() === targetName)
-      if (match) {
-        projectId = match.id
-        projectName = match.name
-        title = text.slice(colonIdx + 1).trim()
-      } else {
-        // No project match — treat the whole thing as the title, use first project
-        projectId = projects[0].id
-        projectName = projects[0].name
-        title = text
-      }
-    } else {
-      // No colon — use first project
-      projectId = projects[0].id
-      projectName = projects[0].name
-      title = text
-    }
-
-    if (!title) {
-      this.bot?.sendMessage(chatId, 'Please provide a task title.')
-      return
-    }
-
-    try {
-      const task = addTask(projectId, { title, description: '', status: 'backlog' })
-      this.bot?.sendMessage(
-        chatId,
-        `✅ Added to *${escapeMarkdown(projectName)}* backlog:\n${escapeMarkdown(title)}`,
-        { parse_mode: 'Markdown' }
-      )
-    } catch (err) {
-      this.bot?.sendMessage(chatId, `Failed to add task: ${err}`)
-    }
-  }
-
-  private async sendWaiting(chatId: number | string): Promise<void> {
-    const sessions = this.sessionManager.getAllSessionsStatus().filter((s) => s.inputWaiting)
-    if (sessions.length === 0) {
-      this.bot?.sendMessage(chatId, 'No sessions waiting for input.')
-      return
-    }
-
-    for (const session of sessions) {
-      await this.notifyInputWaiting(session.id)
     }
   }
 }

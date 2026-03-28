@@ -43,7 +43,11 @@ let telegramBridge: TelegramBridge | null = null
 const tgToken = process.env.TG_BOT_TOKEN || getTelegramConfig().botToken
 const tgChatId = process.env.TG_CHAT_ID || getTelegramConfig().chatId
 if (tgToken && tgChatId) {
-  telegramBridge = new TelegramBridge(sessionManager, { botToken: tgToken, chatId: tgChatId })
+  telegramBridge = new TelegramBridge(sessionManager, {
+    botToken: tgToken,
+    chatId: tgChatId,
+    openaiApiKey: process.env.OPENAI_API_KEY,
+  })
   telegramBridge.start()
   console.log('Telegram bot connected')
 } else {
