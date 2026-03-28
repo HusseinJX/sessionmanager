@@ -66,6 +66,57 @@ export async function sendCommand(
   }
 }
 
+export async function createProject(config: ServerConfig, name: string): Promise<Project> {
+  const res = await fetch(`${config.url}/api/projects`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<Project>
+}
+
+export async function createSession(
+  config: ServerConfig,
+  projectId: string,
+  session: { name: string; cwd: string; command?: string }
+): Promise<SessionStatus> {
+  const res = await fetch(`${config.url}/api/projects/${encodeURIComponent(projectId)}/sessions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(session),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<SessionStatus>
+}
+
+export async function deleteProject(config: ServerConfig, projectId: string): Promise<void> {
+  await fetch(`${config.url}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${config.token}` },
+  })
+}
+
+export async function deleteSession(
+  config: ServerConfig,
+  projectId: string,
+  sessionId: string
+): Promise<void> {
+  await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${config.token}` },
+    }
+  )
+}
+
 export function sseUrl(config: ServerConfig): string {
   return `${config.url}/api/events?token=${encodeURIComponent(config.token)}`
 }
