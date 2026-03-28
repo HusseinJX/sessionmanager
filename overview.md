@@ -654,3 +654,29 @@ Three enhancements to the Telegram bot shorthand system:
 
 **File changed:** `server/src/telegram-bot.ts`
 **Deployed** to droplet and verified working.
+
+---
+
+## Checkpoint 28 — TUI noise filter + Telegram output improvements
+
+Cleaned up terminal output for both the web UI and Telegram by filtering Claude Code TUI artifacts at the source.
+
+**TUI noise filter (`session-manager.ts` → `cleanTuiNoise()`):**
+Applied in `extractRecentLines()` so all consumers (web UI preview, Telegram, API) get clean output. Filters:
+- Box-drawing lines (`───`, `╌╌╌`)
+- Spinner characters (`✶✻✽✢·`)
+- `(thinking)` indicators
+- Status bar fragments (`esc to interrupt`, `shift+tab to cycle`, `accept edits on`)
+- `⏵⏵` prefixed lines
+- Claude loading words (`Prestidigitating…`, `Tempering…`, etc.)
+- Tip lines and `claude --continue/--resume` hints
+- Short garbled redraw fragments (≤5 chars)
+
+**Telegram bot improvements:**
+- Output settling: waits for terminal output to be quiet for 2s (up to 2min max) instead of fixed 500ms — captures full Claude responses
+- Suppresses input-waiting notifications for the switched terminal
+- Single digit messages (`1`, `2`, `3`) sent as bare keystrokes (no Enter) for Claude Code numbered menus
+- Duplicate `cleanTerminalOutput()` filter in telegram-bot.ts for additional Telegram-specific cleaning
+
+**Files changed:** `server/src/session-manager.ts`, `server/src/telegram-bot.ts`
+**Deployed** to droplet and verified working.

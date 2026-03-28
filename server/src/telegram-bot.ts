@@ -138,12 +138,12 @@ export class TelegramBridge {
         return
       }
 
-      // If in switch mode, send everything as a command to the switched terminal
+        // If in switch mode, send everything as a command to the switched terminal
       if (this.switchedSessionId && this.bot) {
-        this.sessionManager.writeToSession(this.switchedSessionId, msg.text + '\r')
-        await new Promise((r) => setTimeout(r, 500))
-        const lines = this.sessionManager.getRecentLines(this.switchedSessionId, 30) ?? []
-        const output = lines.join('\n') || '(no output)'
+        // Single digit → send as bare keystroke (for numbered menus like Claude Code)
+        const isBareKey = /^\d$/.test(msg.text.trim())
+        this.sessionManager.writeToSession(this.switchedSessionId, isBareKey ? msg.text.trim() : msg.text + '\r')
+        const output = await this.waitForOutput(this.switchedSessionId)
         const sent = await this.bot.sendMessage(msg.chat.id, `\`[${escapeMarkdown(this.switchedLabel)}]\`\n\`$ ${escapeMarkdown(msg.text)}\`\n\`\`\`\n${output}\n\`\`\``, {
           parse_mode: 'Markdown',
         })
@@ -155,10 +155,9 @@ export class TelegramBridge {
       if (msg.reply_to_message) {
         const sessionId = messageToSession.get(msg.reply_to_message.message_id)
         if (sessionId && this.bot) {
-          this.sessionManager.writeToSession(sessionId, msg.text + '\r')
-          await new Promise((r) => setTimeout(r, 500))
-          const lines = this.sessionManager.getRecentLines(sessionId, 30) ?? []
-          const output = lines.join('\n') || '(no output)'
+          const isBareKey = /^\d$/.test(msg.text.trim())
+          this.sessionManager.writeToSession(sessionId, isBareKey ? msg.text.trim() : msg.text + '\r')
+          const output = await this.waitForOutput(sessionId)
           const sent = await this.bot.sendMessage(msg.chat.id, `\`$ ${escapeMarkdown(msg.text)}\`\n\`\`\`\n${output}\n\`\`\``, {
             parse_mode: 'Markdown',
             reply_to_message_id: msg.message_id,
@@ -196,6 +195,38 @@ export class TelegramBridge {
       this.bot.stopPolling()
       this.bot = null
     }
+  }
+
+  /**
+   * Wait for terminal output to settle — keeps watching until no new output
+   * arrives for `quietMs`, up to `maxMs` total. Returns the last 30 lines.
+   */
+  private waitForOutput(sessionId: string, quietMs = 2000, maxMs = 120000): Promise<string> {
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout>
+      let maxTimer: ReturnType<typeof setTimeout>
+
+      const finish = () => {
+        clearTimeout(timer)
+        clearTimeout(maxTimer)
+        this.sessionManager.removeListener('output', onOutput)
+        const lines = cleanTerminalOutput(this.sessionManager.getRecentLines(sessionId, 50) ?? []).slice(-30)
+        resolve(lines.join('\n') || '(no output)')
+      }
+
+      const resetQuiet = () => {
+        clearTimeout(timer)
+        timer = setTimeout(finish, quietMs)
+      }
+
+      const onOutput = (id: string) => {
+        if (id === sessionId) resetQuiet()
+      }
+
+      this.sessionManager.on('output', onOutput)
+      resetQuiet()
+      maxTimer = setTimeout(finish, maxMs)
+    })
   }
 
   private async handleSwitch(chatId: number | string, arg?: string): Promise<void> {
@@ -243,7 +274,7 @@ export class TelegramBridge {
     this.switchedLabel = `${letter}${num} — ${resolved.projectName} › ${resolved.session.name}`
 
     // Show current output on switch
-    const lines = this.sessionManager.getRecentLines(resolved.session.id, 30) ?? []
+    const lines = cleanTerminalOutput(this.sessionManager.getRecentLines(resolved.session.id, 50) ?? []).slice(-30)
     const output = lines.join('\n') || '(no output)'
     await this.bot.sendMessage(chatId, `Switched to *${escapeMarkdown(this.switchedLabel)}*\nEverything you type goes to this terminal. Type \`switch off\` to exit.\n\`\`\`\n${output}\n\`\`\``, { parse_mode: 'Markdown' })
   }
@@ -269,17 +300,15 @@ export class TelegramBridge {
     const { session, projectName } = resolved
 
     if (command) {
-      // Send command, wait briefly for output, then read logs
+      // Send command, wait for output to settle, then read logs
       this.sessionManager.writeToSession(session.id, command + '\r')
-      await new Promise((r) => setTimeout(r, 500))
-      const lines = this.sessionManager.getRecentLines(session.id, 30) ?? []
-      const output = lines.join('\n') || '(no output)'
+      const output = await this.waitForOutput(session.id)
       const text = `*${escapeMarkdown(projectName)}* › *${escapeMarkdown(session.name)}*\n\`$ ${escapeMarkdown(command)}\`\n\`\`\`\n${output}\n\`\`\``
       const sent = await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' })
       messageToSession.set(sent.message_id, session.id)
     } else {
       // Just read logs
-      const lines = this.sessionManager.getRecentLines(session.id, 30) ?? []
+      const lines = cleanTerminalOutput(this.sessionManager.getRecentLines(session.id, 50) ?? []).slice(-30)
       const output = lines.join('\n') || '(no output)'
       const text = `*${escapeMarkdown(projectName)}* › *${escapeMarkdown(session.name)}*\n\`\`\`\n${output}\n\`\`\``
       const sent = await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' })
@@ -413,12 +442,14 @@ export class TelegramBridge {
 
   private async notifyInputWaiting(sessionId: string): Promise<void> {
     if (!this.bot) return
+    // Don't notify for the switched terminal — user is already talking to it
+    if (this.switchedSessionId === sessionId) return
 
     const sessions = this.sessionManager.getAllSessionsStatus()
     const session = sessions.find((s) => s.id === sessionId)
     if (!session) return
 
-    const recentLines = this.sessionManager.getRecentLines(sessionId, 8) ?? []
+    const recentLines = cleanTerminalOutput(this.sessionManager.getRecentLines(sessionId, 20) ?? []).slice(-8)
     const preview = recentLines.join('\n')
 
     const text = [
@@ -451,6 +482,46 @@ export class TelegramBridge {
       console.error('Telegram send error:', err)
     }
   }
+}
+
+/**
+ * Strip Claude Code TUI noise: spinners, box-drawing lines, status bar fragments,
+ * thinking indicators, and other non-content lines that clutter Telegram output.
+ */
+function cleanTerminalOutput(lines: string[]): string[] {
+  return lines.filter((line) => {
+    const trimmed = line.trim()
+    if (!trimmed) return false
+    // Box-drawing horizontal rules
+    if (/^[─╌━═╍╎│┃┄┈┊─]{4,}$/.test(trimmed)) return false
+    // Lines that are just arrows
+    if (/^[↑↓←→]+$/.test(trimmed)) return false
+    // Bare prompt
+    if (/^❯\s*$/.test(trimmed)) return false
+    // (thinking) with optional spinner/garble around it
+    if (/\(thinking\)/i.test(trimmed)) return false
+    // Spinner characters (✶✻✽✢·*⠋⠙ etc) with optional short text
+    if (/^[✶✻✽✢✱·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏\*]+/.test(trimmed) && trimmed.length < 80) return false
+    // Status bar: "esc to interrupt", "shift+tab to cycle", "Tab to amend"
+    if (/esc\s*to\s*(interrupt|cancel)/i.test(trimmed)) return false
+    if (/tab\s*to\s*(amend|cycle)/i.test(trimmed)) return false
+    if (/shift\+tab/i.test(trimmed)) return false
+    // Accept edits line (⏵⏵ accept edits on...)
+    if (/⏵/.test(trimmed)) return false
+    // Claude loading/status words (Prestidigitating, Tempering, etc.)
+    if (/^[✶✻✽✢✱·\*]?\s*(Prestidigitating|Tempering|Conjuring|Manifesting|Synthesizing|Ruminating|Contemplating|Reflecting|Pondering|Assembling|Composing|Crafting|Formulating|Generating|Processing|Analyzing|Evaluating|Considering|Deliberating|Meditating|Cogitating|Percolating)…?\s*$/i.test(trimmed)) return false
+    // Tip lines
+    if (/^\s*⎿?\s*Tip:/i.test(trimmed)) return false
+    // "Run claude --continue" or similar
+    if (/claude\s*--(continue|resume)/i.test(trimmed)) return false
+    // Very short garbled fragments (<=5 chars, no spaces, not a real word)
+    if (trimmed.length <= 5 && !/\s/.test(trimmed) && /[^a-zA-Z0-9]/.test(trimmed)) return false
+    // Lines that are just single/double letter fragments with no spaces (garbled TUI redraws)
+    if (trimmed.length <= 3 && !/\s/.test(trimmed)) return false
+    // "accept edits" fragments
+    if (/acceptedit/i.test(trimmed)) return false
+    return true
+  })
 }
 
 function escapeMarkdown(text: string): string {

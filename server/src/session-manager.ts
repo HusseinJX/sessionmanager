@@ -106,6 +106,49 @@ function stripAnsi(str: string): string {
     .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '')
 }
 
+/**
+ * Filter out TUI noise from terminal output — Claude Code spinners, box-drawing,
+ * status bars, thinking indicators, garbled redraws, etc.
+ */
+function cleanTuiNoise(lines: string[]): string[] {
+  return lines.filter((line) => {
+    const t = line.trim()
+    if (!t) return false
+    // Box-drawing horizontal rules
+    if (/^[─╌━═╍╎│┃┄┈┊─]{4,}$/.test(t)) return false
+    // Arrows only
+    if (/^[↑↓←→]+$/.test(t)) return false
+    // Bare prompt
+    if (/^[❯›>]\s*$/.test(t)) return false
+    // (thinking)
+    if (/\(thinking\)/i.test(t)) return false
+    // Spinner chars with optional short text
+    if (/^[✶✻✽✢✱·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏\*]+/.test(t) && t.length < 80) return false
+    // Status bar hints
+    if (/esc\s*to\s*(interrupt|cancel)/i.test(t)) return false
+    if (/tab\s*to\s*(amend|cycle)/i.test(t)) return false
+    if (/shift\+tab/i.test(t)) return false
+    // Accept edits line
+    if (/⏵/.test(t)) return false
+    if (/acceptedit/i.test(t)) return false
+    // ▸▸ or ►► prefixed status lines
+    if (/^[▸►⏵]{2}/.test(t)) return false
+    // Claude loading words
+    if (/^[✶✻✽✢✱·\*]?\s*(Prestidigitating|Tempering|Conjuring|Manifesting|Synthesizing|Ruminating|Contemplating|Reflecting|Pondering|Assembling|Composing|Crafting|Formulating|Generating|Processing|Analyzing|Evaluating|Considering|Deliberating|Meditating|Cogitating|Percolating)…?\s*$/i.test(t)) return false
+    // Tip lines
+    if (/^\s*⎿?\s*Tip:/i.test(t)) return false
+    // claude --continue/--resume
+    if (/claude\s*--(continue|resume)/i.test(t)) return false
+    // Very short garbled fragments (<=3 chars, no spaces)
+    if (t.length <= 3 && !/\s/.test(t)) return false
+    // Short non-word fragments (<=5 chars with special chars)
+    if (t.length <= 5 && !/\s/.test(t) && /[^a-zA-Z0-9]/.test(t)) return false
+    // ↓tomanage / ·1shell type fragments
+    if (/^[·↓↑]/.test(t) && t.length < 30) return false
+    return true
+  })
+}
+
 function getDefaultShell(): string {
   if (process.platform === 'win32') return 'powershell.exe'
   return process.env.SHELL || '/bin/bash'
@@ -355,11 +398,12 @@ export class SessionManager extends EventEmitter {
       }
       return result
     }).join('\n')
-    return processed
-      .split(/\r?\n/)
-      .map((l) => l.trimEnd())
-      .filter((l) => l.length > 0)
-      .slice(-n)
+    return cleanTuiNoise(
+      processed
+        .split(/\r?\n/)
+        .map((l) => l.trimEnd())
+        .filter((l) => l.length > 0)
+    ).slice(-n)
   }
 
   killAll(): void {
