@@ -112,6 +112,8 @@ export class TelegramBridge {
   private chatId: string
   private botToken: string
   private openai: OpenAI | null = null
+  private switchedSessionId: string | null = null
+  private switchedLabel: string = '' // e.g. "A1 — ProjectName › TerminalName"
 
   constructor(sessionManager: SessionManager, config: TelegramConfig) {
     this.sessionManager = sessionManager
@@ -125,20 +127,52 @@ export class TelegramBridge {
   start(): void {
     this.bot = new TelegramBot(this.botToken, { polling: true })
 
-    this.bot.on('message', (msg) => {
+    this.bot.on('message', async (msg) => {
       if (String(msg.chat.id) !== this.chatId) return
       if (!msg.text) return
 
-      // Reply to an input-waiting notification → route directly to terminal
+      // Switch command: "switch A1" to enter, "switch" to check, "switch off" to exit
+      const switchMatch = msg.text.match(/^switch(?:\s+(.+))?$/i)
+      if (switchMatch) {
+        await this.handleSwitch(msg.chat.id, switchMatch[1]?.trim())
+        return
+      }
+
+      // If in switch mode, send everything as a command to the switched terminal
+      if (this.switchedSessionId && this.bot) {
+        this.sessionManager.writeToSession(this.switchedSessionId, msg.text + '\r')
+        await new Promise((r) => setTimeout(r, 500))
+        const lines = this.sessionManager.getRecentLines(this.switchedSessionId, 30) ?? []
+        const output = lines.join('\n') || '(no output)'
+        const sent = await this.bot.sendMessage(msg.chat.id, `\`[${escapeMarkdown(this.switchedLabel)}]\`\n\`$ ${escapeMarkdown(msg.text)}\`\n\`\`\`\n${output}\n\`\`\``, {
+          parse_mode: 'Markdown',
+        })
+        messageToSession.set(sent.message_id, this.switchedSessionId)
+        return
+      }
+
+      // Reply to a shorthand or input-waiting message → send as command to that terminal
       if (msg.reply_to_message) {
         const sessionId = messageToSession.get(msg.reply_to_message.message_id)
-        if (sessionId) {
+        if (sessionId && this.bot) {
           this.sessionManager.writeToSession(sessionId, msg.text + '\r')
-          this.bot?.sendMessage(msg.chat.id, `Sent to terminal.`, {
+          await new Promise((r) => setTimeout(r, 500))
+          const lines = this.sessionManager.getRecentLines(sessionId, 30) ?? []
+          const output = lines.join('\n') || '(no output)'
+          const sent = await this.bot.sendMessage(msg.chat.id, `\`$ ${escapeMarkdown(msg.text)}\`\n\`\`\`\n${output}\n\`\`\``, {
+            parse_mode: 'Markdown',
             reply_to_message_id: msg.message_id,
           })
+          messageToSession.set(sent.message_id, sessionId)
           return
         }
+      }
+
+      // Shorthand: a1 = read terminal 1 of group a, a1:cmd = send cmd then read
+      const shorthand = msg.text.match(/^([a-zA-Z])(\d+)(?::(.+))?$/s)
+      if (shorthand) {
+        this.handleShorthand(msg.chat.id, shorthand[1].toLowerCase(), parseInt(shorthand[2], 10), shorthand[3])
+        return
       }
 
       // Everything else goes through the LLM
@@ -161,6 +195,95 @@ export class TelegramBridge {
     if (this.bot) {
       this.bot.stopPolling()
       this.bot = null
+    }
+  }
+
+  private async handleSwitch(chatId: number | string, arg?: string): Promise<void> {
+    if (!this.bot) return
+
+    // "switch" with no arg → show current state
+    if (!arg) {
+      if (this.switchedSessionId) {
+        await this.bot.sendMessage(chatId, `Currently switched to *${escapeMarkdown(this.switchedLabel)}*\n\nType \`switch off\` to exit.`, { parse_mode: 'Markdown' })
+      } else {
+        await this.bot.sendMessage(chatId, `Not switched to any terminal.\n\nType \`switch A1\` to enter switch mode.`, { parse_mode: 'Markdown' })
+      }
+      return
+    }
+
+    // "switch off" / "switch exit" → exit switch mode
+    if (arg.toLowerCase() === 'off' || arg.toLowerCase() === 'exit') {
+      if (this.switchedSessionId) {
+        const label = this.switchedLabel
+        this.switchedSessionId = null
+        this.switchedLabel = ''
+        await this.bot.sendMessage(chatId, `Exited switch mode (was *${escapeMarkdown(label)}*).`, { parse_mode: 'Markdown' })
+      } else {
+        await this.bot.sendMessage(chatId, `Not in switch mode.`, { parse_mode: 'Markdown' })
+      }
+      return
+    }
+
+    // "switch A1" → parse and enter switch mode
+    const m = arg.match(/^([a-zA-Z])(\d+)$/)
+    if (!m) {
+      await this.bot.sendMessage(chatId, `Usage: \`switch A1\`, \`switch off\`, or \`switch\``, { parse_mode: 'Markdown' })
+      return
+    }
+
+    const resolved = this.resolveShorthand(m[1].toLowerCase(), parseInt(m[2], 10))
+    if (typeof resolved === 'string') {
+      await this.bot.sendMessage(chatId, resolved, { parse_mode: 'Markdown' })
+      return
+    }
+
+    const letter = m[1].toUpperCase()
+    const num = m[2]
+    this.switchedSessionId = resolved.session.id
+    this.switchedLabel = `${letter}${num} — ${resolved.projectName} › ${resolved.session.name}`
+
+    // Show current output on switch
+    const lines = this.sessionManager.getRecentLines(resolved.session.id, 30) ?? []
+    const output = lines.join('\n') || '(no output)'
+    await this.bot.sendMessage(chatId, `Switched to *${escapeMarkdown(this.switchedLabel)}*\nEverything you type goes to this terminal. Type \`switch off\` to exit.\n\`\`\`\n${output}\n\`\`\``, { parse_mode: 'Markdown' })
+  }
+
+  private resolveShorthand(groupLetter: string, terminalNum: number): { session: { id: string; name: string }; projectName: string } | string {
+    const projects = getProjects()
+    if (projects.length === 0) return 'No projects found.'
+    const groupIndex = groupLetter.charCodeAt(0) - 'a'.charCodeAt(0)
+    if (groupIndex >= projects.length) return `Group *${groupLetter}* not found. Only ${projects.length} group(s) exist (a–${String.fromCharCode('a'.charCodeAt(0) + projects.length - 1)}).`
+    const project = projects[groupIndex]
+    const sessionIndex = terminalNum - 1
+    if (sessionIndex < 0 || sessionIndex >= project.sessions.length) return `Terminal *${terminalNum}* not found in group *${groupLetter}* (${escapeMarkdown(project.name)}). Only ${project.sessions.length} terminal(s) exist.`
+    return { session: project.sessions[sessionIndex], projectName: project.name }
+  }
+
+  private async handleShorthand(chatId: number | string, groupLetter: string, terminalNum: number, command?: string): Promise<void> {
+    if (!this.bot) return
+    const resolved = this.resolveShorthand(groupLetter, terminalNum)
+    if (typeof resolved === 'string') {
+      await this.bot.sendMessage(chatId, resolved, { parse_mode: 'Markdown' })
+      return
+    }
+    const { session, projectName } = resolved
+
+    if (command) {
+      // Send command, wait briefly for output, then read logs
+      this.sessionManager.writeToSession(session.id, command + '\r')
+      await new Promise((r) => setTimeout(r, 500))
+      const lines = this.sessionManager.getRecentLines(session.id, 30) ?? []
+      const output = lines.join('\n') || '(no output)'
+      const text = `*${escapeMarkdown(projectName)}* › *${escapeMarkdown(session.name)}*\n\`$ ${escapeMarkdown(command)}\`\n\`\`\`\n${output}\n\`\`\``
+      const sent = await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' })
+      messageToSession.set(sent.message_id, session.id)
+    } else {
+      // Just read logs
+      const lines = this.sessionManager.getRecentLines(session.id, 30) ?? []
+      const output = lines.join('\n') || '(no output)'
+      const text = `*${escapeMarkdown(projectName)}* › *${escapeMarkdown(session.name)}*\n\`\`\`\n${output}\n\`\`\``
+      const sent = await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' })
+      messageToSession.set(sent.message_id, session.id)
     }
   }
 

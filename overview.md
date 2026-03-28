@@ -609,3 +609,48 @@ Replaced the rigid slash command system with an LLM-powered natural language int
 
 **Files changed:** `server/src/telegram-bot.ts` (full rewrite), `server/src/index.ts` (pass API key)
 **Deployed** to droplet and verified working.
+
+---
+
+## Checkpoint 26 — Telegram bot shorthand notation for terminals
+
+Added a fast shorthand syntax to the Telegram bot for reading and commanding terminals without going through the LLM.
+
+**Syntax:**
+- `a1` — read last 30 lines of output from terminal 1 in group a (first project)
+- `b2:ls -la` — send `ls -la` to terminal 2 in group b (second project), then return output
+- Groups map alphabetically to projects in order: a=first project, b=second, c=third...
+- Terminals numbered 1-based within each project's session list
+
+**Behavior:**
+- Read mode (`a1`): responds with project name, session name, and last 30 lines in a code block
+- Command mode (`a1:cmd`): sends the command, waits 500ms for output, then responds with the command echo and last 30 lines
+- Error messages for invalid group letters or terminal numbers (shows available range)
+- Shorthand is matched before the LLM handler, so no OpenAI call is made for these
+
+**Implementation:**
+- Regex `^([a-z])(\d+)(?::(.+))?$` with `s` flag (allows multiline commands after colon)
+- `resolveShorthand()` maps letter→project index, number→session index
+- `handleShorthand()` reads or writes+reads based on whether a colon command is present
+
+**File changed:** `server/src/telegram-bot.ts`
+
+---
+
+## Checkpoint 27 — Telegram bot: case-insensitive shorthand, reply chains, switch mode
+
+Three enhancements to the Telegram bot shorthand system:
+
+**Case-insensitive shorthand:** `A1`, `a1`, `B2`, `b2` all work — letter is normalized to lowercase before lookup.
+
+**Reply chains:** Replying to any shorthand response (or input-waiting notification) sends your reply as a command to that terminal and returns the output. The response is also mapped, so you can keep chaining replies indefinitely to have a conversation with a terminal.
+
+**Switch mode:** Persistent terminal focus — no need to prefix or reply.
+- `switch A1` — enters switch mode. Shows current output. Everything typed goes to that terminal as commands.
+- `switch` — shows which terminal is currently switched to
+- `switch off` / `switch exit` — exits switch mode, back to normal LLM routing
+- All responses in switch mode have a `[A1 — ProjectName › TerminalName]` header
+- Switch is checked before reply routing and shorthand, so it captures all messages
+
+**File changed:** `server/src/telegram-bot.ts`
+**Deployed** to droplet and verified working.
