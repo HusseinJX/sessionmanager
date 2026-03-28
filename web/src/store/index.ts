@@ -7,11 +7,28 @@ const MAX_LOG_LINES = 150
 // ANSI escape sequence stripper
 function stripAnsi(str: string): string {
   return str
-    .replace(/\x1b\[[0-9;]*[mGKJHfABCDEFsuST]/g, '')
-    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, '')   // All CSI sequences (including ?h, ?l, etc.)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
     .replace(/\x1b[>=]/g, '')
     .replace(/\x1b[()][A-Z0-9]/g, '')
+    .replace(/\x1b[\x20-\x2f]*[\x30-\x7e]/g, '')      // Other ESC sequences
     .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '')
+}
+
+// Simulate carriage return: text after \r overwrites the start of the line
+function processCarriageReturns(str: string): string {
+  return str.split('\n').map((line) => {
+    if (!line.includes('\r')) return line
+    const parts = line.split('\r')
+    let result = parts[0]
+    for (let i = 1; i < parts.length; i++) {
+      const overwrite = parts[i]
+      if (overwrite.length === 0) continue
+      // Overwrite from the beginning of the line
+      result = overwrite + result.slice(overwrite.length)
+    }
+    return result
+  }).join('\n')
 }
 
 export interface SessionRuntimeState {
@@ -76,7 +93,7 @@ function loadConfig(): ServerConfig | null {
 }
 
 function buildPreviewLines(existing: string[], newData: string): string[] {
-  const stripped = stripAnsi(newData)
+  const stripped = processCarriageReturns(stripAnsi(newData))
   const combined = existing.join('\n') + stripped
   const lines = combined.split(/\r?\n/)
   const kept = lines.slice(-8).map((l) => l.trimEnd())
@@ -223,7 +240,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const existing = state.sessionStates[sessionId]
       if (!existing) return state
       const isExpanded = state.expandedSessionId === sessionId
-      const stripped = stripAnsi(data)
+      const stripped = processCarriageReturns(stripAnsi(data))
       const newLogLines = stripped.split('\n').filter((l) => l.trim().length > 0)
       const logLines = [...existing.logLines, ...newLogLines].slice(-MAX_LOG_LINES)
       return {

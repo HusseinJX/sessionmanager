@@ -6,6 +6,7 @@ export interface SessionConfig {
   name: string
   cwd: string
   command?: string
+  parentSessionId?: string
   aiConfig?: { enabled: boolean; rules: string[] }
 }
 
@@ -78,17 +79,32 @@ interface AppState {
 
 // ANSI escape sequence stripper for preview text
 function stripAnsi(str: string): string {
-  // Remove most ANSI escape sequences
   return str
-    .replace(/\x1b\[[0-9;]*[mGKJHfABCDEFsuST]/g, '')
-    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, '')   // All CSI sequences (including ?h, ?l, etc.)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
     .replace(/\x1b[>=]/g, '')
     .replace(/\x1b[()][A-Z0-9]/g, '')
+    .replace(/\x1b[\x20-\x2f]*[\x30-\x7e]/g, '')      // Other ESC sequences
     .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '')
 }
 
+// Simulate carriage return: text after \r overwrites the start of the line
+function processCarriageReturns(str: string): string {
+  return str.split('\n').map((line) => {
+    if (!line.includes('\r')) return line
+    const parts = line.split('\r')
+    let result = parts[0]
+    for (let i = 1; i < parts.length; i++) {
+      const overwrite = parts[i]
+      if (overwrite.length === 0) continue
+      result = overwrite + result.slice(overwrite.length)
+    }
+    return result
+  }).join('\n')
+}
+
 function buildPreviewLines(existing: string[], newData: string): string[] {
-  const stripped = stripAnsi(newData)
+  const stripped = processCarriageReturns(stripAnsi(newData))
   const combined = (existing.join('\n') + stripped)
   const lines = combined.split(/\r?\n/)
 
@@ -288,6 +304,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   getSessionsForActiveProject: () => {
     const project = get().getActiveProject()
-    return project?.sessions ?? []
+    return (project?.sessions ?? []).filter((s) => !s.parentSessionId)
   }
 }))
