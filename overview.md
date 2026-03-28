@@ -576,3 +576,36 @@ Extended the Telegram bot and server to support adding backlog items from Telegr
 - `DELETE /api/projects/:pid/tasks/:tid` — delete a task
 
 **Files changed:** `server/src/store.ts`, `server/src/http-server.ts`, `server/src/telegram-bot.ts`
+
+---
+
+## Checkpoint 25 — LLM-powered Telegram bot
+
+Replaced the rigid slash command system with an LLM-powered natural language interface. All messages (except direct replies to input-waiting notifications) now go through GPT-4o-mini with tool use.
+
+**How it works:**
+- User sends any natural language message via Telegram
+- Bot calls OpenAI with a system prompt describing SessionManager and 6 tools
+- Model decides which tools to call, bot executes them, feeds results back
+- Model produces a final concise Telegram response
+- Tool-use loop runs up to 5 iterations for multi-step requests
+- Reply-to-notification still routes directly to terminals (no LLM overhead)
+
+**Tools exposed to the LLM:**
+| Tool | Purpose |
+|------|---------|
+| `get_status` | List all sessions with state, cwd, recent output |
+| `get_projects` | List projects with sessions and task counts |
+| `get_session_logs` | Read last N lines from a session |
+| `send_command` | Send a command to a terminal |
+| `add_backlog_item` | Add a task to a project's backlog |
+| `get_tasks` | List tasks for a project |
+
+**Configuration:**
+- `OPENAI_API_KEY` env var added to systemd service on the droplet
+- Without the key, bot responds with "not configured" for non-reply messages
+
+**Dependencies added:** `openai` SDK
+
+**Files changed:** `server/src/telegram-bot.ts` (full rewrite), `server/src/index.ts` (pass API key)
+**Deployed** to droplet and verified working.
