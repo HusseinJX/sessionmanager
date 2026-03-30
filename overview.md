@@ -742,3 +742,20 @@ Full keyboard-driven navigation system with customizable shortcuts.
 **Shortcut hint bar:** Bottom of the terminal grid shows discoverable shortcut hints.
 
 **Files changed:** `keybindings.ts` (new), `store/index.ts`, `App.tsx`, `TerminalGrid.tsx`, `TerminalCard.tsx`, `FullTerminal.tsx`, `ConfigPanel.tsx`
+
+---
+
+## Checkpoint 29 — Fix Option+Right and Option+Delete in expanded terminal
+
+**Problem:** Option+Left worked for word navigation but Option+Right and Option+Delete did not. After Option+Delete, regular Backspace also broke.
+
+**Root cause (two-layered):**
+1. **macOS input method interference:** `macOptionIsMeta: true` in xterm.js caused macOS Chromium to fire native `beforeinput` events (e.g. `deleteWordBackward`) on xterm's hidden textarea, corrupting its internal state.
+2. **Shell vi mode:** The user's zsh runs in vi mode (`bindkey -v`). ESC+b happened to work (vi normal mode `b` = backward-word), but ESC+f triggered vi's "find char" command (BEL), and ESC+DEL was unbound (BEL).
+
+**Fix:**
+- **FullTerminal.tsx:** Disabled `macOptionIsMeta`, intercept ALL Alt+key combos in a window capture-phase handler that sends correct escape sequences manually. Added `beforeinput` blocker on xterm's textarea to prevent macOS character injection (e.g. Option+f → "ƒ"). Custom key handler blocks all Alt events from xterm.
+- **session-manager.ts:** Append `bindkey` commands to the zsh integration `.zshrc` (after user's config loads) that bind `\ef`→forward-word, `\eb`→backward-word, `\e\x7f`→backward-kill-word, `\ed`→kill-word in both `emacs` and `viins` keymaps.
+- **keybindings.ts:** Added `term.deleteWord` (Alt+Backspace) binding definition.
+
+**Files changed:** `FullTerminal.tsx`, `session-manager.ts`, `keybindings.ts`
