@@ -21,13 +21,14 @@ export const KEYBINDING_DEFS: KeybindingDef[] = [
   { id: 'nav.collapse',     label: 'Back / Collapse',    category: 'Navigation', description: 'Go back or collapse expanded view',         defaultKeys: 'Escape',             context: 'global' },
 
   // ── Terminal (expanded view) ──────────────────────────────────────────
-  { id: 'term.backOrRunners', label: 'Runners / Back',   category: 'Terminal', description: 'Focus runners sidebar, or back to grid',      defaultKeys: 'Command+ArrowLeft',  context: 'fullterm' },
-  { id: 'term.backToTerminal', label: 'Back to terminal', category: 'Terminal', description: 'Return focus from sidebar to terminal',      defaultKeys: 'Command+ArrowRight', context: 'fullterm' },
+  { id: 'term.backToGrid',     label: 'Back to projects',  category: 'Terminal', description: 'Return to project grid view',                  defaultKeys: 'Command+ArrowLeft',  context: 'fullterm' },
+  { id: 'term.focusRunners',   label: 'Runners sidebar',   category: 'Terminal', description: 'Focus the runners sidebar',                    defaultKeys: 'Command+ArrowRight', context: 'fullterm' },
   { id: 'term.prevRunner',  label: 'Previous runner',    category: 'Terminal', description: 'Switch to the previous runner',               defaultKeys: 'Command+ArrowUp',    context: 'fullterm' },
   { id: 'term.nextRunner',  label: 'Next runner',        category: 'Terminal', description: 'Switch to the next runner',                   defaultKeys: 'Command+ArrowDown',  context: 'fullterm' },
   { id: 'term.addRunner',   label: 'Add runner',         category: 'Terminal', description: 'Spawn a new runner terminal',                 defaultKeys: 'Command+Shift+R',    context: 'fullterm' },
   { id: 'term.wordLeft',    label: 'Word left',          category: 'Terminal', description: 'Move cursor back one word',                   defaultKeys: 'Alt+ArrowLeft',      context: 'fullterm' },
   { id: 'term.wordRight',   label: 'Word right',         category: 'Terminal', description: 'Move cursor forward one word',                defaultKeys: 'Alt+ArrowRight',     context: 'fullterm' },
+  { id: 'term.deleteWord',  label: 'Delete word back',   category: 'Terminal', description: 'Delete the previous word',                    defaultKeys: 'Alt+Backspace',      context: 'fullterm' },
 
   // ── App-wide ──────────────────────────────────────────────────────────
   { id: 'app.newTerminal',  label: 'New terminal',       category: 'App', description: 'Add a terminal to the active project',             defaultKeys: 'Command+T',          context: 'global' },

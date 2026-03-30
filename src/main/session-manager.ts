@@ -152,6 +152,13 @@ function getZshIntegrationDir(): string {
   fs.writeFileSync(
     path.join(dir, '.zshrc'),
     '[[ -f "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshrc" ]] && source "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshrc" 2>/dev/null || true\n' +
+    '# Ensure Option+Arrow and Option+Delete word-nav bindings exist in all keymaps\n' +
+    'for _sm_km in emacs viins; do\n' +
+    '  bindkey -M "$_sm_km" "\\ef" forward-word 2>/dev/null\n' +
+    '  bindkey -M "$_sm_km" "\\eb" backward-word 2>/dev/null\n' +
+    '  bindkey -M "$_sm_km" "\\e\\x7f" backward-kill-word 2>/dev/null\n' +
+    '  bindkey -M "$_sm_km" "\\ed" kill-word 2>/dev/null\n' +
+    'done; unset _sm_km\n' +
     '_sm_osc7() { printf "\\e]7;file://%s%s\\a" "${HOST:-$HOSTNAME}" "${PWD}"; }\n' +
     'precmd_functions+=(_sm_osc7)\n'
   )

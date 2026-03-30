@@ -83,6 +83,8 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
   } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
+  const activeSessionIdRef = useRef(activeSessionId)
+  activeSessionIdRef.current = activeSessionId
   const [sidebarFocused, setSidebarFocused] = useState(false)
   const [sidebarFocusIndex, setSidebarFocusIndex] = useState(0)
 
@@ -93,6 +95,7 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
   const removeOutputRef = useRef<(() => void) | null>(null)
   const isLoadedRef = useRef(false)
 
+  const altPressedRef = useRef(false)
   const [cmdInput, setCmdInput] = useState('')
 
   const ownerProject = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
@@ -155,7 +158,15 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
       // Don't intercept when typing in the command input
       const tag = (document.activeElement as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') {
-        if (!e.metaKey && !e.ctrlKey) return
+        if (!e.metaKey && !e.ctrlKey && !e.altKey) return
+      }
+
+      // ── Back to project grid (works in both modes) ────────────────
+      if (matchesBinding(e, 'term.backToGrid', kb)) {
+        e.preventDefault()
+        e.stopPropagation()
+        setExpandedSession(null)
+        return
       }
 
       // ── Sidebar focused mode ──────────────────────────────────────
@@ -183,25 +194,18 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
           }
           return
         }
-        if (matchesBinding(e, 'term.backToTerminal', kb) || e.key === 'Escape') {
+        if (e.key === 'Escape') {
           e.preventDefault()
           e.stopPropagation()
           setSidebarFocused(false)
           setTimeout(() => terminalRef.current?.focus(), 50)
           return
         }
-        // Cmd+Left in sidebar = back to grid
-        if (matchesBinding(e, 'term.backOrRunners', kb)) {
-          e.preventDefault()
-          e.stopPropagation()
-          setExpandedSession(null)
-          return
-        }
         return
       }
 
       // ── Normal mode (terminal focused) ─────────────────────────────
-      if (matchesBinding(e, 'term.backOrRunners', kb)) {
+      if (matchesBinding(e, 'term.focusRunners', kb)) {
         e.preventDefault()
         e.stopPropagation()
         // Focus runners sidebar
@@ -236,11 +240,36 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
         handleAddRunner()
         return
       }
+
+      // ── Option+key — full manual handling (macOptionIsMeta is off because
+      // macOS Chromium fires input-method events that corrupt xterm state)
+      if (e.altKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        altPressedRef.current = true
+        const sid = activeSessionIdRef.current
+        let seq: string | null = null
+        if (e.key === 'ArrowLeft')  seq = '\x1bb'      // backward-word
+        else if (e.key === 'ArrowRight') seq = '\x1bf'  // forward-word
+        else if (e.key === 'Backspace')  seq = '\x1b\x7f' // backward-kill-word
+        else if (e.key === 'Delete')     seq = '\x1bd'  // kill-word (forward)
+        else if (e.key.length === 1)     seq = '\x1b' + e.key // ESC + char (readline)
+        if (seq) window.api.sendInput(sid, seq)
+        return
+      }
+    }
+
+    const handleKeyUp = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === 'Alt' || e.key === 'Meta') altPressedRef.current = false
     }
 
     // Use capture phase so we run before xterm.js internal handler
     window.addEventListener('keydown', handleKeyDown, true)
-    return () => window.removeEventListener('keydown', handleKeyDown, true)
+    window.addEventListener('keyup', handleKeyUp, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+      window.removeEventListener('keyup', handleKeyUp, true)
+    }
   }, [sidebarFocused, sidebarFocusIndex, activeSessionId, allSidebarIds.length])
 
   useEffect(() => {
@@ -251,6 +280,7 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
       scrollback: 1000,
       cursorBlink: true,
       convertEol: true,
+      macOptionIsMeta: false,
       fontFamily: '"Menlo", "Monaco", "Courier New", monospace',
       fontSize: 13,
       lineHeight: 1.4,
@@ -289,23 +319,26 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
     terminalRef.current = term
     fitAddonRef.current = fitAddon
 
-    // Option+Arrow → word navigation escape sequences
-    term.attachCustomKeyEventHandler((e: globalThis.KeyboardEvent) => {
-      if (e.type !== 'keydown') return true
-      if (e.altKey && !e.metaKey && !e.ctrlKey) {
-        if (e.key === 'ArrowLeft') {
-          // Send ESC b (word backward)
-          window.api.sendInput(activeSessionId, '\x1bb')
-          return false
-        }
-        if (e.key === 'ArrowRight') {
-          // Send ESC f (word forward)
-          window.api.sendInput(activeSessionId, '\x1bf')
-          return false
-        }
+    // Block macOS input-method character injection (e.g. Option+f → "ƒ")
+    // that bypasses keydown preventDefault on Chromium/macOS
+    const xtermTextarea = containerRef.current.querySelector('textarea')
+    const blockAltInput = (e: InputEvent): void => {
+      if (altPressedRef.current) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
       }
-      // Let Cmd+ combos pass through to our window-level handler
+    }
+    xtermTextarea?.addEventListener('beforeinput', blockAltInput as EventListener, true)
+
+    // Cmd combos → skip (handled by our window-level capture handler)
+    // All Alt combos → skip (handled manually in capture handler to avoid
+    // macOS input-method interference that corrupts xterm state)
+    term.attachCustomKeyEventHandler((e: globalThis.KeyboardEvent) => {
       if (e.metaKey) return false
+      if (e.altKey) {
+        e.preventDefault()
+        return false
+      }
       return true
     })
 
