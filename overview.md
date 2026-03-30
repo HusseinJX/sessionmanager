@@ -835,3 +835,18 @@ Switched both the standalone server (`server/src/`) and Electron server (`src/ma
 - Generated certs excluded from git via `.gitignore`
 
 **Files changed:** `server/src/http-server.ts`, `server/src/index.ts`, `src/main/http-server.ts`, `src/main/index.ts`, `.gitignore`
+
+---
+
+## Checkpoint — Web view keyboard shortcuts (Cmd+Arrow, Alt+Arrow)
+
+**Problem:** Cmd+Arrow and Alt+Arrow key combinations didn't work in the web view's expanded terminal (`ExpandedSession.tsx`). The Electron version had full handling but the web version was missing it entirely.
+
+**Fix applied to `web/src/components/ExpandedSession.tsx`:**
+- Added `altPressedRef` to track Alt key state
+- Added capture-phase `window.addEventListener('keydown', ..., true)` handler for:
+  - `Cmd+ArrowLeft` → close expanded view (back to grid)
+  - `Cmd+ArrowUp/Down` → switch between runners in sidebar
+  - `Alt+Arrow/key` → send readline escape sequences (`\x1bb`, `\x1bf`, etc.)
+- Added `term.attachCustomKeyEventHandler` to block metaKey and altKey events from xterm.js internal processing
+- Added `beforeinput` blocker on xterm's textarea to prevent macOS input-method character injection when Alt is held

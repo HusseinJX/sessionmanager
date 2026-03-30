@@ -219,6 +219,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   const observerRef = useRef<ResizeObserver | null>(null)
   const sseListenerRef = useRef<((e: MessageEvent<string>) => void) | null>(null)
   const isLoadedRef = useRef(false)
+  const altPressedRef = useRef(false)
 
   const ownerProject = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
   const primarySession = ownerProject?.sessions.find((s) => s.id === sessionId)
@@ -257,6 +258,62 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     const updated = await fetchProjects(config)
     setProjects(updated)
   }
+
+  // Capture-phase keyboard handler: Cmd+Arrow navigation + Alt+Arrow word nav
+  useEffect(() => {
+    const allIds = [sessionId, ...runners.map((r) => r.id)]
+
+    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+      // Cmd+ArrowLeft = back to grid
+      if (e.metaKey && !e.altKey && !e.shiftKey && e.key === 'ArrowLeft') {
+        e.preventDefault()
+        e.stopPropagation()
+        handleClose()
+        return
+      }
+      // Cmd+ArrowUp = previous runner
+      if (e.metaKey && !e.altKey && !e.shiftKey && e.key === 'ArrowUp') {
+        e.preventDefault()
+        e.stopPropagation()
+        const curIdx = allIds.indexOf(activeSessionId)
+        if (curIdx > 0) handleSwitchSession(allIds[curIdx - 1])
+        return
+      }
+      // Cmd+ArrowDown = next runner
+      if (e.metaKey && !e.altKey && !e.shiftKey && e.key === 'ArrowDown') {
+        e.preventDefault()
+        e.stopPropagation()
+        const curIdx = allIds.indexOf(activeSessionId)
+        if (curIdx < allIds.length - 1) handleSwitchSession(allIds[curIdx + 1])
+        return
+      }
+      // Alt+Arrow/key = word navigation & readline sequences
+      if (e.altKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        altPressedRef.current = true
+        let seq: string | null = null
+        if (e.key === 'ArrowLeft')       seq = '\x1bb'
+        else if (e.key === 'ArrowRight') seq = '\x1bf'
+        else if (e.key === 'Backspace')  seq = '\x1b\x7f'
+        else if (e.key === 'Delete')     seq = '\x1bd'
+        else if (e.key.length === 1)     seq = '\x1b' + e.key
+        if (seq && config) sendInput(config, activeSessionId, seq).catch(() => {})
+        return
+      }
+    }
+
+    const handleKeyUp = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Alt' || e.key === 'Meta') altPressedRef.current = false
+    }
+
+    window.addEventListener('keydown', handleKeyDown, true)
+    window.addEventListener('keyup', handleKeyUp, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+      window.removeEventListener('keyup', handleKeyUp, true)
+    }
+  }, [activeSessionId, config, handleClose, sessionId, runners])
 
   // Mount xterm.js terminal
   useEffect(() => {
@@ -304,6 +361,26 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     terminalRef.current = term
     fitAddonRef.current = fitAddon
 
+    // Block macOS input-method character injection via Option key (e.g. Option+f → "ƒ")
+    const xtermTextarea = containerRef.current.querySelector('textarea')
+    const blockAltInput = (e: InputEvent) => {
+      if (altPressedRef.current) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+      }
+    }
+    xtermTextarea?.addEventListener('beforeinput', blockAltInput as EventListener, true)
+
+    // Cmd combos and Alt combos are handled by our capture-phase window handler
+    term.attachCustomKeyEventHandler((e: globalThis.KeyboardEvent) => {
+      if (e.metaKey) return false
+      if (e.altKey) {
+        e.preventDefault()
+        return false
+      }
+      return true
+    })
+
     // Send keystrokes to server
     term.onData((data) => {
       sendInput(config, activeSessionId, data).catch(() => {})
@@ -349,6 +426,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     setTimeout(() => term.focus(), 50)
 
     return () => {
+      xtermTextarea?.removeEventListener('beforeinput', blockAltInput as EventListener, true)
       es.removeEventListener('output', handleOutput)
       es.close()
       observer.disconnect()
