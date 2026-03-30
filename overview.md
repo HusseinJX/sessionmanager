@@ -708,3 +708,37 @@ Hardened the web terminal → droplet connection for production-grade security.
 - `.env` file locked to `chmod 600` (root-only)
 
 **Files changed:** `deploy/Caddyfile`, `docker-compose.yml`, `server/src/http-server.ts`, `deploy/setup.sh`
+
+---
+
+## Checkpoint 28 — Keyboard navigation & customizable keybindings
+
+Full keyboard-driven navigation system with customizable shortcuts.
+
+**New file: `src/renderer/src/keybindings.ts`** — Central keybinding definitions (21 bindings), event matching, and display formatting.
+
+**Grid view navigation:**
+- Arrow keys navigate between minimized terminal cards (with green focus ring)
+- Enter expands the focused card to full-screen
+- `Cmd+Left/Right` switches between project tabs
+- `Cmd+T` adds a new terminal, `Cmd+Shift+N` creates a project
+- `Cmd+,` opens settings, `Cmd+Shift+P` toggles Terminals/Planner view
+- Escape clears focus or closes modals
+
+**Expanded terminal (FullTerminal) navigation:**
+- `Option+Left/Right` sends word-backward/forward escape sequences (`ESC b` / `ESC f`) to the PTY
+- `Cmd+Left` focuses the runners sidebar (highlighted items, arrow key navigation, Enter to select)
+- `Cmd+Right` / Escape returns focus to the terminal
+- `Cmd+Up/Down` switches between runners
+- `Cmd+Shift+R` spawns a new runner
+- Sidebar shows keyboard hints
+
+**Keybindings panel (Settings > Keybindings tab):**
+- Lists all 21 bindings grouped by category (Navigation, Terminal, App)
+- Click any binding to record a new key combination
+- Per-binding reset to default, or "Reset all"
+- Custom overrides persisted in `AppSettings.keybindingOverrides`
+
+**Shortcut hint bar:** Bottom of the terminal grid shows discoverable shortcut hints.
+
+**Files changed:** `keybindings.ts` (new), `store/index.ts`, `App.tsx`, `TerminalGrid.tsx`, `TerminalCard.tsx`, `FullTerminal.tsx`, `ConfigPanel.tsx`

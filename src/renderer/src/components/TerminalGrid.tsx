@@ -25,7 +25,7 @@ function getGridTemplate(layoutMode: string): string {
 }
 
 export default function TerminalGrid(): React.ReactElement {
-  const { getActiveProject, getSessionsForActiveProject, setShowAddSessionModal, settings } = useAppStore()
+  const { getActiveProject, getSessionsForActiveProject, setShowAddSessionModal, settings, focusedCardIndex } = useAppStore()
 
   const handleAdd = (): void => {
     const project = getActiveProject()
@@ -67,18 +67,19 @@ export default function TerminalGrid(): React.ReactElement {
   const layoutMode = settings.layoutMode || 'auto'
 
   return (
-    <div className="h-full overflow-y-auto p-4">
+    <div className="h-full overflow-y-auto p-4 flex flex-col">
       <div
-        className="grid gap-3"
+        className="grid gap-3 flex-1"
         style={{
           gridTemplateColumns: getGridTemplate(layoutMode)
         }}
       >
-        {sessions.map((session) => (
+        {sessions.map((session, idx) => (
           <TerminalCard
             key={session.id}
             session={session}
             projectId={project.id}
+            isFocused={focusedCardIndex === idx}
           />
         ))}
 
@@ -95,6 +96,15 @@ export default function TerminalGrid(): React.ReactElement {
           <span className="text-2xl opacity-50">+</span>
           <span className="text-xs">New Terminal</span>
         </button>
+      </div>
+
+      {/* Keyboard shortcut hints */}
+      <div className="flex items-center gap-4 pt-3 pb-1 text-[10px] text-text-muted/40 select-none flex-shrink-0">
+        <span><kbd className="font-mono">{'\u2190\u2192'}</kbd> navigate</span>
+        <span><kbd className="font-mono">{'\u21A9'}</kbd> expand</span>
+        <span><kbd className="font-mono">{'\u2318\u2190\u2192'}</kbd> projects</span>
+        <span><kbd className="font-mono">{'\u2318'}T</kbd> new terminal</span>
+        <span><kbd className="font-mono">{'\u2318'},</kbd> settings</span>
       </div>
     </div>
   )

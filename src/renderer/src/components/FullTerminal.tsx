@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { CanvasAddon } from '@xterm/addon-canvas'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useAppStore, SessionRuntimeState, SessionConfig } from '../store'
+import { matchesBinding } from '../keybindings'
 import '@xterm/xterm/css/xterm.css'
 
 interface FullTerminalProps {
@@ -18,6 +19,7 @@ function SidebarItem({
   runtimeState,
   isActive,
   isPrimary,
+  isKeyFocused,
   onClick,
   onRemove,
 }: {
@@ -26,6 +28,7 @@ function SidebarItem({
   runtimeState: SessionRuntimeState | undefined
   isActive: boolean
   isPrimary?: boolean
+  isKeyFocused?: boolean
   onClick: () => void
   onRemove?: () => void
 }): React.ReactElement {
@@ -44,6 +47,7 @@ function SidebarItem({
       className={`
         px-2 py-2 cursor-pointer border-b border-border-subtle transition-colors group/item
         ${isActive ? 'bg-bg-overlay border-l-2 border-l-accent-green' : 'hover:bg-bg-overlay/60 border-l-2 border-l-transparent'}
+        ${isKeyFocused ? 'ring-1 ring-inset ring-accent-blue bg-bg-overlay/80' : ''}
       `}
     >
       <div className="flex items-center gap-1.5 min-w-0">
@@ -79,6 +83,8 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
   } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
+  const [sidebarFocused, setSidebarFocused] = useState(false)
+  const [sidebarFocusIndex, setSidebarFocusIndex] = useState(0)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -138,6 +144,105 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
     removeSessionFromProject(ownerProject.id, id)
   }
 
+  // ── Keyboard navigation for expanded terminal ─────────────────────
+  // All sidebar items: [primary, ...runners]
+  const allSidebarIds = [sessionId, ...runners.map((r) => r.id)]
+
+  useEffect(() => {
+    const kb = useAppStore.getState().settings.keybindingOverrides ?? {}
+
+    const handleKeyDown = (e: globalThis.KeyboardEvent): void => {
+      // Don't intercept when typing in the command input
+      const tag = (document.activeElement as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        if (!e.metaKey && !e.ctrlKey) return
+      }
+
+      // ── Sidebar focused mode ──────────────────────────────────────
+      if (sidebarFocused) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          e.stopPropagation()
+          setSidebarFocusIndex((i) => Math.max(0, i - 1))
+          return
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          e.stopPropagation()
+          setSidebarFocusIndex((i) => Math.min(allSidebarIds.length - 1, i + 1))
+          return
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          e.stopPropagation()
+          const targetId = allSidebarIds[sidebarFocusIndex]
+          if (targetId) {
+            setActiveSessionId(targetId)
+            setSidebarFocused(false)
+            setTimeout(() => terminalRef.current?.focus(), 50)
+          }
+          return
+        }
+        if (matchesBinding(e, 'term.backToTerminal', kb) || e.key === 'Escape') {
+          e.preventDefault()
+          e.stopPropagation()
+          setSidebarFocused(false)
+          setTimeout(() => terminalRef.current?.focus(), 50)
+          return
+        }
+        // Cmd+Left in sidebar = back to grid
+        if (matchesBinding(e, 'term.backOrRunners', kb)) {
+          e.preventDefault()
+          e.stopPropagation()
+          setExpandedSession(null)
+          return
+        }
+        return
+      }
+
+      // ── Normal mode (terminal focused) ─────────────────────────────
+      if (matchesBinding(e, 'term.backOrRunners', kb)) {
+        e.preventDefault()
+        e.stopPropagation()
+        // Focus runners sidebar
+        const curIdx = allSidebarIds.indexOf(activeSessionId)
+        setSidebarFocusIndex(curIdx >= 0 ? curIdx : 0)
+        setSidebarFocused(true)
+        return
+      }
+
+      if (matchesBinding(e, 'term.prevRunner', kb)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const curIdx = allSidebarIds.indexOf(activeSessionId)
+        if (curIdx > 0) {
+          handleSwitchSession(allSidebarIds[curIdx - 1])
+        }
+        return
+      }
+      if (matchesBinding(e, 'term.nextRunner', kb)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const curIdx = allSidebarIds.indexOf(activeSessionId)
+        if (curIdx < allSidebarIds.length - 1) {
+          handleSwitchSession(allSidebarIds[curIdx + 1])
+        }
+        return
+      }
+
+      if (matchesBinding(e, 'term.addRunner', kb)) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleAddRunner()
+        return
+      }
+    }
+
+    // Use capture phase so we run before xterm.js internal handler
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [sidebarFocused, sidebarFocusIndex, activeSessionId, allSidebarIds.length])
+
   useEffect(() => {
     if (!containerRef.current || isLoadedRef.current) return
     isLoadedRef.current = true
@@ -183,6 +288,26 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
     term.open(containerRef.current)
     terminalRef.current = term
     fitAddonRef.current = fitAddon
+
+    // Option+Arrow → word navigation escape sequences
+    term.attachCustomKeyEventHandler((e: globalThis.KeyboardEvent) => {
+      if (e.type !== 'keydown') return true
+      if (e.altKey && !e.metaKey && !e.ctrlKey) {
+        if (e.key === 'ArrowLeft') {
+          // Send ESC b (word backward)
+          window.api.sendInput(activeSessionId, '\x1bb')
+          return false
+        }
+        if (e.key === 'ArrowRight') {
+          // Send ESC f (word forward)
+          window.api.sendInput(activeSessionId, '\x1bf')
+          return false
+        }
+      }
+      // Let Cmd+ combos pass through to our window-level handler
+      if (e.metaKey) return false
+      return true
+    })
 
     term.onData((data) => {
       window.api.sendInput(activeSessionId, data)
@@ -334,7 +459,8 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
           runtimeState={sessionStates[sessionId]}
           isActive={activeSessionId === sessionId}
           isPrimary
-          onClick={() => handleSwitchSession(sessionId)}
+          isKeyFocused={sidebarFocused && sidebarFocusIndex === 0}
+          onClick={() => { handleSwitchSession(sessionId); setSidebarFocused(false) }}
         />
 
         <div className="flex items-center justify-between px-2 py-1 border-b border-border-subtle">
@@ -348,7 +474,7 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
           </button>
         </div>
 
-        {runners.map((r) => {
+        {runners.map((r, idx) => {
           const rLiveCwd = sessionStates[r.id]?.currentCwd ?? r.cwd
           const rLabel = rLiveCwd.split('/').filter(Boolean).pop() ?? 'runner'
           const rSublabel = rLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
@@ -359,11 +485,24 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
               sublabel={rSublabel !== rLabel ? rSublabel : undefined}
               runtimeState={sessionStates[r.id]}
               isActive={activeSessionId === r.id}
-              onClick={() => handleSwitchSession(r.id)}
+              isKeyFocused={sidebarFocused && sidebarFocusIndex === idx + 1}
+              onClick={() => { handleSwitchSession(r.id); setSidebarFocused(false) }}
               onRemove={() => handleRemoveRunner(r.id)}
             />
           )
         })}
+        {/* Sidebar keyboard hint */}
+        <div className="mt-auto px-2 py-2 border-t border-border-subtle">
+          {sidebarFocused ? (
+            <p className="text-[9px] text-accent-blue leading-tight">
+              <span className="font-medium">Navigate:</span> <kbd className="font-mono">{'\u2191\u2193'}</kbd> move {'\u00B7'} <kbd className="font-mono">{'\u21A9'}</kbd> select {'\u00B7'} <kbd className="font-mono">Esc</kbd> back
+            </p>
+          ) : (
+            <p className="text-[9px] text-text-muted/50 leading-tight">
+              <kbd className="font-mono">{'\u2318\u2190'}</kbd> focus sidebar
+            </p>
+          )}
+        </div>
       </aside>
     </div>
   )

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store'
+import { KEYBINDING_DEFS, formatKeys, getEffectiveKeys, eventToKeys, type KeybindingDef } from '../keybindings'
 
 interface MissingPath {
   sessionId: string
@@ -61,10 +62,185 @@ function recordKeyDown(e: KeyboardEvent): string | null {
   return parts.join('+')
 }
 
+// ── Keybindings Tab ────────────────────────────────────────────────────
+
+function KeybindingsTab(): React.ReactElement {
+  const { settings } = useAppStore()
+  const overrides = settings.keybindingOverrides ?? {}
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [pendingKeys, setPendingKeys] = useState<string | null>(null)
+
+  const handleKeyCapture = useCallback((e: KeyboardEvent) => {
+    if (!editingId) return
+    e.preventDefault()
+    e.stopPropagation()
+    const keys = eventToKeys(e)
+    // Skip bare modifier presses
+    if (['Command', 'Control', 'Alt', 'Shift', 'Command+Shift', 'Command+Alt', 'Control+Shift', 'Control+Alt', 'Alt+Shift'].includes(keys)) return
+    setPendingKeys(keys)
+  }, [editingId])
+
+  useEffect(() => {
+    if (editingId) {
+      window.addEventListener('keydown', handleKeyCapture, true)
+      return () => window.removeEventListener('keydown', handleKeyCapture, true)
+    }
+    return undefined
+  }, [editingId, handleKeyCapture])
+
+  const startEditing = (id: string): void => {
+    setEditingId(id)
+    setPendingKeys(null)
+  }
+
+  const saveBinding = (): void => {
+    if (!editingId || !pendingKeys) return
+    const newOverrides = { ...overrides, [editingId]: pendingKeys }
+    useAppStore.getState().setSettings({ keybindingOverrides: newOverrides })
+    window.api.setSettings({ keybindingOverrides: newOverrides })
+    setEditingId(null)
+    setPendingKeys(null)
+  }
+
+  const resetBinding = (id: string): void => {
+    const newOverrides = { ...overrides }
+    delete newOverrides[id]
+    useAppStore.getState().setSettings({ keybindingOverrides: newOverrides })
+    window.api.setSettings({ keybindingOverrides: newOverrides })
+    if (editingId === id) {
+      setEditingId(null)
+      setPendingKeys(null)
+    }
+  }
+
+  const resetAll = (): void => {
+    useAppStore.getState().setSettings({ keybindingOverrides: {} })
+    window.api.setSettings({ keybindingOverrides: {} })
+    setEditingId(null)
+    setPendingKeys(null)
+  }
+
+  const cancelEditing = (): void => {
+    setEditingId(null)
+    setPendingKeys(null)
+  }
+
+  const categories = ['Navigation', 'Terminal', 'App'] as const
+  const grouped = categories.map((cat) => ({
+    category: cat,
+    bindings: KEYBINDING_DEFS.filter((b) => b.category === cat)
+  }))
+
+  return (
+    <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-muted">
+          Click a keybinding to change it. Press the new key combination to record.
+        </p>
+        <button
+          className="text-xs text-text-muted hover:text-accent-red transition-colors px-2 py-1 rounded hover:bg-bg-overlay"
+          onClick={resetAll}
+          title="Reset all to defaults"
+        >
+          Reset all
+        </button>
+      </div>
+
+      {grouped.map(({ category, bindings }) => (
+        <div key={category}>
+          <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5 mt-2">
+            {category}
+          </h3>
+          <div className="space-y-0.5">
+            {bindings.map((def) => {
+              const isEditing = editingId === def.id
+              const effectiveKeys = getEffectiveKeys(def.id, overrides)
+              const isCustom = !!overrides[def.id]
+
+              return (
+                <div
+                  key={def.id}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded transition-colors ${
+                    isEditing ? 'bg-bg-overlay ring-1 ring-accent-blue' : 'hover:bg-bg-overlay/50'
+                  }`}
+                >
+                  {/* Label */}
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs text-text-primary">{def.label}</span>
+                    {def.context && def.context !== 'global' && (
+                      <span className="ml-1 text-[9px] text-text-muted/60 uppercase">{def.context}</span>
+                    )}
+                  </div>
+
+                  {/* Keys display / edit */}
+                  {isEditing ? (
+                    <div className="flex items-center gap-1">
+                      {pendingKeys ? (
+                        <>
+                          <kbd className="px-2 py-0.5 bg-bg-base border border-accent-blue rounded text-xs font-mono text-text-primary">
+                            {formatKeys(pendingKeys)}
+                          </kbd>
+                          <button
+                            className="text-xs text-accent-green hover:text-accent-green/80 px-1.5 py-0.5 rounded hover:bg-bg-overlay transition-colors"
+                            onClick={saveBinding}
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="text-xs text-text-muted hover:text-text-primary px-1 py-0.5 rounded hover:bg-bg-overlay transition-colors"
+                            onClick={cancelEditing}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-xs text-accent-yellow animate-pulse font-mono px-2 py-0.5 border border-accent-yellow/50 rounded">
+                            Press keys...
+                          </span>
+                          <button
+                            className="text-xs text-text-muted hover:text-text-primary px-1 py-0.5"
+                            onClick={cancelEditing}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="px-2 py-0.5 bg-bg-overlay border border-border-subtle rounded text-xs font-mono text-text-primary hover:border-accent-blue transition-colors cursor-pointer"
+                        onClick={() => startEditing(def.id)}
+                        title={`${def.description} — click to change`}
+                      >
+                        {formatKeys(effectiveKeys)}
+                      </button>
+                      {isCustom && (
+                        <button
+                          className="text-[10px] text-text-muted hover:text-accent-yellow transition-colors px-1"
+                          onClick={() => resetBinding(def.id)}
+                          title={`Reset to default: ${formatKeys(def.defaultKeys)}`}
+                        >
+                          reset
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function ConfigPanel(): React.ReactElement {
   const { setShowConfigPanel, setProjects, setActiveProject, settings } = useAppStore()
 
-  const [tab, setTab] = useState<'settings' | 'export' | 'import'>('settings')
+  const [tab, setTab] = useState<'settings' | 'keybindings' | 'export' | 'import'>('settings')
   const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
   const [importValidation, setImportValidation] = useState<ImportValidation | null>(null)
   const [pathRemappings, setPathRemappings] = useState<Record<string, string>>({})
@@ -236,7 +412,7 @@ export default function ConfigPanel(): React.ReactElement {
 
         {/* Tabs */}
         <div className="flex border-b border-border-subtle">
-          {(['settings', 'export', 'import'] as const).map((t) => (
+          {(['settings', 'keybindings', 'export', 'import'] as const).map((t) => (
             <button
               key={t}
               className={`px-5 py-2 text-sm border-b-2 transition-colors capitalize ${
@@ -384,6 +560,10 @@ export default function ConfigPanel(): React.ReactElement {
                 )}
               </div>
             </>
+          )}
+
+          {tab === 'keybindings' && (
+            <KeybindingsTab />
           )}
 
           {tab === 'export' && (

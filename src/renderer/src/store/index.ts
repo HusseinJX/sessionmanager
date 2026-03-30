@@ -55,6 +55,7 @@ export interface AppSettings {
   serverEnabled: boolean
   windowMode: boolean
   layoutMode: string
+  keybindingOverrides: Record<string, string>
 }
 
 interface AppState {
@@ -70,6 +71,8 @@ interface AppState {
   showConfigPanel: boolean
   // View mode per project: 'terminals' or 'planner'
   projectViewMode: Record<string, 'terminals' | 'planner'>
+  // Keyboard navigation
+  focusedCardIndex: number | null
   // Settings
   settings: AppSettings
   // Actions
@@ -90,6 +93,7 @@ interface AppState {
   updateSessionCwd: (sessionId: string, cwd: string) => void
   appendPreviewLine: (sessionId: string, data: string) => void
   markSessionViewed: (sessionId: string) => void
+  setFocusedCardIndex: (idx: number | null) => void
   setSettings: (settings: Partial<AppSettings>) => void
   getActiveProject: () => Project | null
   getSessionsForActiveProject: () => SessionConfig[]
@@ -151,6 +155,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showAddProjectModal: false,
   showConfigPanel: false,
   projectViewMode: {},
+  focusedCardIndex: null,
   settings: {
     theme: 'dark',
     gridColumns: 'auto',
@@ -161,7 +166,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     serverToken: '',
     serverEnabled: true,
     windowMode: false,
-    layoutMode: 'auto'
+    layoutMode: 'auto',
+    keybindingOverrides: {}
   },
 
   setProjects: (projects) => set({ projects }),
@@ -316,6 +322,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
     })),
+
+  setFocusedCardIndex: (idx) => set({ focusedCardIndex: idx }),
 
   setSettings: (settings) =>
     set((state) => ({

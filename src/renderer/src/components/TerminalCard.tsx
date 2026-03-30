@@ -32,6 +32,7 @@ async function forkSession(
 interface TerminalCardProps {
   session: SessionConfig
   projectId: string
+  isFocused?: boolean
 }
 
 function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: boolean }): React.ReactElement {
@@ -59,7 +60,7 @@ function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: b
   )
 }
 
-export default function TerminalCard({ session, projectId }: TerminalCardProps): React.ReactElement {
+export default function TerminalCard({ session, projectId, isFocused }: TerminalCardProps): React.ReactElement {
   const { sessionStates, setExpandedSession, removeSessionFromProject } = useAppStore()
 
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -113,7 +114,9 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps):
         bg-bg-card border rounded-lg overflow-hidden
         transition-all duration-150 hover:shadow-lg
         flex flex-col group relative
-        ${inputWaiting
+        ${isFocused
+          ? 'border-accent-green shadow-[0_0_0_1px_theme(colors.accent-green/0.5)] ring-1 ring-accent-green/30'
+          : inputWaiting
           ? 'border-accent-red shadow-[0_0_0_1px_theme(colors.accent-red/0.4)]'
           : status === 'exited'
           ? 'border-accent-red border-opacity-50'

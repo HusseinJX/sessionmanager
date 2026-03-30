@@ -1,5 +1,6 @@
 import React, { useEffect, useCallback } from 'react'
 import { useAppStore } from './store'
+import { matchesBinding } from './keybindings'
 import ProjectTabs from './components/ProjectTabs'
 import TerminalGrid from './components/TerminalGrid'
 import FullTerminal from './components/FullTerminal'
@@ -129,6 +130,65 @@ function playAlertChime(): void {
     }
   } catch {
     // AudioContext unavailable — skip silently
+  }
+}
+
+// ── Keyboard navigation helpers ───────────────────────────────────────
+
+function switchProject(dir: -1 | 1): void {
+  const { projects, activeProjectId, setActiveProject, setFocusedCardIndex } = useAppStore.getState()
+  if (projects.length === 0) return
+  const idx = projects.findIndex((p) => p.id === activeProjectId)
+  const next = (idx + dir + projects.length) % projects.length
+  setActiveProject(projects[next].id)
+  setFocusedCardIndex(null)
+}
+
+function moveCardFocus(total: number, dx: number, dy: number, cols: number): void {
+  const { focusedCardIndex, setFocusedCardIndex } = useAppStore.getState()
+  const cur = focusedCardIndex ?? -1
+
+  if (dy !== 0) {
+    const next = cur + dy * cols
+    if (next >= 0 && next < total) setFocusedCardIndex(next)
+    else if (cur === -1) setFocusedCardIndex(0)
+    return
+  }
+
+  // horizontal
+  if (cur === -1) {
+    setFocusedCardIndex(dx > 0 ? 0 : total - 1)
+  } else {
+    const next = (cur + dx + total) % total
+    setFocusedCardIndex(next)
+  }
+}
+
+function getGridCols(layoutMode: string): number {
+  switch (layoutMode) {
+    case '1': return 1
+    case '2': return 2
+    case '3': return 3
+    default: return Math.max(1, Math.floor(window.innerWidth / 340))
+  }
+}
+
+function handleQuickTerminal(): void {
+  const state = useAppStore.getState()
+  const project = state.getActiveProject()
+  if (!project) return
+  const sessions = state.getSessionsForActiveProject()
+  const lastCwd = sessions.at(-1)?.cwd
+  if (lastCwd) {
+    const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
+    window.api.addSessionToStore(project.id, { name, cwd: lastCwd }).then((stored) => {
+      const s = useAppStore.getState()
+      s.addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd })
+      s.initSessionState(stored.id, project.id)
+      return window.api.createTerminal({ id: stored.id, name, cwd: lastCwd, projectId: project.id })
+    }).catch((err) => console.error('Failed to create session:', err))
+  } else {
+    state.setShowAddSessionModal(true)
   }
 }
 
@@ -275,16 +335,131 @@ export default function App(): React.ReactElement {
     }
   }, [appendPreviewLine, updateSessionStatus, setInputWaiting, updateSessionCwd])
 
-  // Keyboard handler for Escape to collapse
+  // ── Global keyboard handler ─────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && expandedSessionId) {
-        setExpandedSession(null)
+      const state = useAppStore.getState()
+      const kb = state.settings.keybindingOverrides ?? {}
+
+      // Never intercept when a text input / textarea is focused
+      // (unless it's Escape or a Cmd+combo)
+      const tag = (document.activeElement as HTMLElement)?.tagName
+      const inInput = tag === 'INPUT' || tag === 'TEXTAREA'
+
+      // ── Escape: always collapse expanded view / close modals ────────
+      if (matchesBinding(e, 'nav.collapse', kb)) {
+        if (state.expandedSessionId) {
+          e.preventDefault()
+          state.setExpandedSession(null)
+          return
+        }
+        if (state.showConfigPanel) {
+          e.preventDefault()
+          state.setShowConfigPanel(false)
+          return
+        }
+        if (state.showAddSessionModal || state.showAddProjectModal) {
+          e.preventDefault()
+          state.setShowAddSessionModal(false)
+          state.setShowAddProjectModal(false)
+          return
+        }
+        // Clear card focus
+        if (state.focusedCardIndex !== null) {
+          state.setFocusedCardIndex(null)
+          return
+        }
+        return
+      }
+
+      // ── App-wide shortcuts (even when FullTerminal is open) ─────────
+      if (matchesBinding(e, 'app.settings', kb)) {
+        e.preventDefault()
+        state.setShowConfigPanel(!state.showConfigPanel)
+        return
+      }
+
+      // Don't handle further shortcuts when modals are open
+      if (state.showConfigPanel || state.showAddSessionModal || state.showAddProjectModal) return
+
+      // Don't handle grid/app shortcuts when FullTerminal is open (it has its own handler)
+      if (state.expandedSessionId) return
+
+      // Don't intercept bare keys when typing in an input
+      if (inInput && !e.metaKey && !e.ctrlKey) return
+
+      // ── App shortcuts ───────────────────────────────────────────────
+      if (matchesBinding(e, 'app.newTerminal', kb)) {
+        e.preventDefault()
+        handleQuickTerminal()
+        return
+      }
+      if (matchesBinding(e, 'app.newProject', kb)) {
+        e.preventDefault()
+        state.setShowAddProjectModal(true)
+        return
+      }
+      if (matchesBinding(e, 'app.toggleView', kb)) {
+        e.preventDefault()
+        const proj = state.getActiveProject()
+        if (proj) {
+          const cur = state.getProjectViewMode(proj.id)
+          state.setProjectViewMode(proj.id, cur === 'terminals' ? 'planner' : 'terminals')
+        }
+        return
+      }
+
+      // ── Project tab navigation ──────────────────────────────────────
+      if (matchesBinding(e, 'nav.prevProject', kb)) {
+        e.preventDefault()
+        switchProject(-1)
+        return
+      }
+      if (matchesBinding(e, 'nav.nextProject', kb)) {
+        e.preventDefault()
+        switchProject(1)
+        return
+      }
+
+      // ── Card grid navigation ────────────────────────────────────────
+      if (inInput) return // bare arrow keys should still work in inputs
+      const sessions = state.getSessionsForActiveProject()
+      if (sessions.length === 0) return
+
+      if (matchesBinding(e, 'nav.expandCard', kb)) {
+        if (state.focusedCardIndex !== null && sessions[state.focusedCardIndex]) {
+          e.preventDefault()
+          state.setExpandedSession(sessions[state.focusedCardIndex].id)
+        }
+        return
+      }
+
+      const cols = getGridCols(state.settings.layoutMode)
+      if (matchesBinding(e, 'nav.cardLeft', kb)) {
+        e.preventDefault()
+        moveCardFocus(sessions.length, -1, 0, cols)
+        return
+      }
+      if (matchesBinding(e, 'nav.cardRight', kb)) {
+        e.preventDefault()
+        moveCardFocus(sessions.length, 1, 0, cols)
+        return
+      }
+      if (matchesBinding(e, 'nav.cardUp', kb)) {
+        e.preventDefault()
+        moveCardFocus(sessions.length, 0, -1, cols)
+        return
+      }
+      if (matchesBinding(e, 'nav.cardDown', kb)) {
+        e.preventDefault()
+        moveCardFocus(sessions.length, 0, 1, cols)
+        return
       }
     }
+
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [expandedSessionId, setExpandedSession])
+  }, [])
 
   const hasProjects = projects.length > 0
 
