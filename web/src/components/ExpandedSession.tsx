@@ -75,6 +75,26 @@ function MobileKeybar({
     alt: false,
     meta: false,
   })
+  const [keyboardOffset, setKeyboardOffset] = useState(0)
+
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+
+    const update = () => {
+      // When keyboard is open, visualViewport.height < window.innerHeight
+      // The offset from the bottom of the window to the top of the viewport
+      const offset = window.innerHeight - vv.height - vv.offsetTop
+      setKeyboardOffset(Math.max(0, offset))
+    }
+
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [])
 
   const toggleMod = (key: 'ctrl' | 'alt' | 'meta') => {
     setMods((prev) => ({ ...prev, [key]: !prev[key] }))
@@ -133,7 +153,16 @@ function MobileKeybar({
   )
 
   return (
-    <div className="md:hidden flex items-center gap-1.5 px-2 py-1.5 bg-bg-card border-t border-border-subtle overflow-x-auto flex-shrink-0">
+    <div
+      className="md:hidden flex items-center gap-1.5 px-2 py-1.5 bg-bg-card border-t border-border-subtle overflow-x-auto flex-shrink-0"
+      style={keyboardOffset > 0 ? {
+        position: 'fixed',
+        bottom: keyboardOffset,
+        left: 0,
+        right: 0,
+        zIndex: 50,
+      } : undefined}
+    >
       {/* Modifier keys */}
       {modBtn('Ctrl', 'ctrl')}
       {modBtn('⌥ Opt', 'alt')}
