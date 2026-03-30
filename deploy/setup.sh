@@ -44,13 +44,14 @@ fi
 
 cd "$APP_DIR"
 
-# 5. Write .env
+# 5. Write .env (DOMAIN is used by Caddy for auto-TLS certificate provisioning)
 cat > .env <<EOF
 SM_TOKEN=$TOKEN
 DOMAIN=$DOMAIN
 EOF
+chmod 600 .env
 
-echo ">>> .env written"
+echo ">>> .env written (permissions locked to root)"
 
 # 6. Build and start
 echo ">>> Building and starting..."

@@ -1,3 +1,24 @@
-:80 {
+{$DOMAIN:localhost} {
+	# TLS — Caddy auto-provisions Let's Encrypt certificates when a real domain is set
+	# For localhost development, Caddy uses a self-signed cert automatically
+
+	# Security headers
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# Remove server identification
+		-Server
+	}
+
 	reverse_proxy app:8080
+}
+
+# Redirect bare HTTP to HTTPS (Caddy does this automatically for named domains,
+# but this explicit block ensures it for any edge cases)
+http://{$DOMAIN:localhost} {
+	redir https://{host}{uri} permanent
 }

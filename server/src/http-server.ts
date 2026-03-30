@@ -21,6 +21,11 @@ interface SseClient {
   res: http.ServerResponse
 }
 
+interface RateLimitEntry {
+  count: number
+  resetAt: number
+}
+
 export class HttpApiServer {
   private server: http.Server | null = null
   private clients: SseClient[] = []
@@ -28,6 +33,9 @@ export class HttpApiServer {
   private sessionManager: SessionManager
   private token: string
   private port: number
+  private rateLimitMap = new Map<string, RateLimitEntry>()
+  private readonly RATE_LIMIT = 60        // requests per window
+  private readonly RATE_WINDOW_MS = 60000 // 1 minute
 
   constructor(sessionManager: SessionManager, port: number, token: string) {
     this.sessionManager = sessionManager
@@ -90,14 +98,47 @@ export class HttpApiServer {
     return false
   }
 
-  private cors(res: http.ServerResponse): void {
-    res.setHeader('Access-Control-Allow-Origin', '*')
+  private getClientIp(req: http.IncomingMessage): string {
+    // Trust X-Forwarded-For from Caddy reverse proxy
+    const forwarded = req.headers['x-forwarded-for']
+    if (typeof forwarded === 'string') return forwarded.split(',')[0].trim()
+    return req.socket.remoteAddress || 'unknown'
+  }
+
+  private isRateLimited(req: http.IncomingMessage): boolean {
+    const ip = this.getClientIp(req)
+    const now = Date.now()
+    const entry = this.rateLimitMap.get(ip)
+
+    if (!entry || now > entry.resetAt) {
+      this.rateLimitMap.set(ip, { count: 1, resetAt: now + this.RATE_WINDOW_MS })
+      return false
+    }
+
+    entry.count++
+    return entry.count > this.RATE_LIMIT
+  }
+
+  private securityHeaders(res: http.ServerResponse): void {
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('X-Frame-Options', 'DENY')
+    res.setHeader('X-XSS-Protection', '1; mode=block')
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  }
+
+  private cors(res: http.ServerResponse, req?: http.IncomingMessage): void {
+    // Restrict CORS to the origin making the request (requires valid auth anyway)
+    const origin = req?.headers['origin']
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   }
 
-  private json(res: http.ServerResponse, status: number, body: unknown): void {
-    this.cors(res)
+  private json(res: http.ServerResponse, status: number, body: unknown, req?: http.IncomingMessage): void {
+    if (req) this.cors(res, req)
     res.writeHead(status, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(body))
   }
@@ -111,7 +152,8 @@ export class HttpApiServer {
   }
 
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-    this.cors(res)
+    this.securityHeaders(res)
+    this.cors(res, req)
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204)
@@ -125,6 +167,13 @@ export class HttpApiServer {
     // Only require auth for /api/ routes
     if (urlPath.startsWith('/api/') && !this.authenticate(req)) {
       this.json(res, 401, { error: 'Unauthorized' })
+      return
+    }
+
+    // Rate limit API requests
+    if (urlPath.startsWith('/api/') && this.isRateLimited(req)) {
+      res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '60' })
+      res.end(JSON.stringify({ error: 'Too many requests' }))
       return
     }
 
@@ -365,13 +414,17 @@ export class HttpApiServer {
   }
 
   private handleSse(req: http.IncomingMessage, res: http.ServerResponse): void {
-    res.writeHead(200, {
+    const origin = req.headers['origin']
+    const headers: Record<string, string> = {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    })
+    }
+    if (origin) {
+      headers['Access-Control-Allow-Origin'] = origin
+      headers['Vary'] = 'Origin'
+    }
+    res.writeHead(200, headers)
     res.write('retry: 3000\n\n')
 
     const snapshot = this.sessionManager.getAllSessionsStatus()
