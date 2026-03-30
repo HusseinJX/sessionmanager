@@ -680,3 +680,31 @@ Applied in `extractRecentLines()` so all consumers (web UI preview, Telegram, AP
 
 **Files changed:** `server/src/session-manager.ts`, `server/src/telegram-bot.ts`
 **Deployed** to droplet and verified working.
+
+---
+
+## Checkpoint 27 — HTTPS & Security Hardening
+
+Hardened the web terminal → droplet connection for production-grade security.
+
+**Caddy HTTPS (deploy/Caddyfile):**
+- Domain-based auto-TLS via `{$DOMAIN}` env var — Caddy auto-provisions Let's Encrypt certs
+- HSTS with 2-year max-age, includeSubDomains, preload
+- Security headers: `X-Content-Type-Options`, `X-Frame-Options DENY`, `X-XSS-Protection`, `Referrer-Policy`, `Permissions-Policy`
+- Server version header stripped
+- HTTP → HTTPS 301 redirect
+
+**Docker Compose (docker-compose.yml):**
+- Passes `DOMAIN` env var to Caddy container
+- Added UDP 443 for HTTP/3 (QUIC)
+
+**Application-level hardening (server/src/http-server.ts):**
+- CORS: replaced wildcard `*` with dynamic origin reflection (requires valid Bearer token)
+- Security headers on all responses
+- Rate limiting: 60 req/min per IP on `/api/` endpoints, returns 429 with Retry-After
+- SSE handler CORS fixed (was hardcoded wildcard)
+
+**Deployment security (deploy/setup.sh):**
+- `.env` file locked to `chmod 600` (root-only)
+
+**Files changed:** `deploy/Caddyfile`, `docker-compose.yml`, `server/src/http-server.ts`, `deploy/setup.sh`
