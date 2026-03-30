@@ -806,3 +806,32 @@ Added full Planner (Kanban board) support to the web view, matching the native E
 6. **Keyboard shortcut** — `Cmd+Shift+P` (or `Ctrl+Shift+P`) toggles between Terminals and Planner views, wired in `App.tsx`.
 
 **Files changed:** `server/src/store.ts`, `server/src/http-server.ts`, `web/src/types.ts`, `web/src/api.ts`, `web/src/store/index.ts`, `web/src/components/PlannerBoard.tsx` (new), `web/src/components/ProjectTabs.tsx`, `web/src/App.tsx`
+
+---
+
+## Checkpoint 30 — Mobile keyboard bar fix & deploy docs
+
+**Problem:** On mobile, the modifier key toolbar (Ctrl, Opt, Cmd, Esc, Tab, arrows) was hidden behind the virtual keyboard when it opened.
+
+**Fix:** Used the `visualViewport` API to detect keyboard height and reposition the toolbar as a fixed element sitting above the on-screen keyboard. When the keyboard closes, it returns to its normal flow position.
+
+**Deployment:** Confirmed the app is live on DigitalOcean droplet `sessionmanager` at `64.23.191.7`. Deployed via rsync + systemd restart (not Docker). Discovered a stale `server/web-ui/` directory was taking priority over `web/dist/` for serving static files — removed it.
+
+**Deploy docs:** Created `howtodeploy.md` with the standard deploy process: build locally, rsync to droplet, restart systemd service, verify.
+
+**Files changed:** `web/src/components/ExpandedSession.tsx`, `howtodeploy.md` (new)
+
+---
+
+## Checkpoint 31 — HTTPS for both servers
+
+Switched both the standalone server (`server/src/`) and Electron server (`src/main/`) from HTTP to HTTPS.
+
+**How it works:**
+- On first start, a self-signed TLS certificate is auto-generated via `openssl` and saved to a `certs/` directory (standalone: `$SM_DATA_DIR/certs/`, Electron: `userData/certs/`)
+- Subsequent starts reuse the existing cert (valid 365 days)
+- Custom certs can be provided via `SSL_KEY` and `SSL_CERT` env vars (standalone server)
+- All internal URL references updated from `http://` to `https://`
+- Generated certs excluded from git via `.gitignore`
+
+**Files changed:** `server/src/http-server.ts`, `server/src/index.ts`, `src/main/http-server.ts`, `src/main/index.ts`, `.gitignore`

@@ -3,3 +3,7 @@ out/
 dist/
 server/node_modules
 server/dist
+certs/
+*.key
+*.crt
+*.pem

@@ -1,4 +1,5 @@
 import * as http from 'http'
+import * as https from 'https'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { SessionManager } from './session-manager'
@@ -16,6 +17,11 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 }
 
+export interface TlsOptions {
+  key: string | Buffer
+  cert: string | Buffer
+}
+
 interface SseClient {
   id: number
   res: http.ServerResponse
@@ -27,25 +33,27 @@ interface RateLimitEntry {
 }
 
 export class HttpApiServer {
-  private server: http.Server | null = null
+  private server: https.Server | null = null
   private clients: SseClient[] = []
   private clientIdCounter = 0
   private sessionManager: SessionManager
   private token: string
   private port: number
+  private tlsOptions: TlsOptions
   private rateLimitMap = new Map<string, RateLimitEntry>()
   private readonly RATE_LIMIT = 60        // requests per window
   private readonly RATE_WINDOW_MS = 60000 // 1 minute
 
-  constructor(sessionManager: SessionManager, port: number, token: string) {
+  constructor(sessionManager: SessionManager, port: number, token: string, tlsOptions: TlsOptions) {
     this.sessionManager = sessionManager
     this.port = port
     this.token = token
+    this.tlsOptions = tlsOptions
   }
 
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => this.handleRequest(req, res))
+      this.server = https.createServer(this.tlsOptions, (req, res) => this.handleRequest(req, res))
       this.server.listen(this.port, '0.0.0.0', () => {
         this.bindSessionEvents()
         resolve()
@@ -93,7 +101,7 @@ export class HttpApiServer {
   private authenticate(req: http.IncomingMessage): boolean {
     const auth = req.headers['authorization']
     if (auth?.startsWith('Bearer ') && auth.slice(7) === this.token) return true
-    const url = new URL(req.url || '/', `http://localhost:${this.port}`)
+    const url = new URL(req.url || '/', `https://localhost:${this.port}`)
     if (url.searchParams.get('token') === this.token) return true
     return false
   }
@@ -161,7 +169,7 @@ export class HttpApiServer {
       return
     }
 
-    const url = new URL(req.url || '/', `http://localhost:${this.port}`)
+    const url = new URL(req.url || '/', `https://localhost:${this.port}`)
     const urlPath = url.pathname
 
     // Only require auth for /api/ routes

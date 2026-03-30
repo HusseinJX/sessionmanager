@@ -28,7 +28,7 @@ ssh root@64.23.191.7 "systemctl restart sessionmanager"
 
 ```bash
 ssh root@64.23.191.7 "systemctl status sessionmanager --no-pager | head -10"
-ssh root@64.23.191.7 "curl -s http://localhost:8080/ | grep 'index-'"
+ssh root@64.23.191.7 "curl -sk https://localhost:8080/ | grep 'index-'"
 ```
 
 ## Notes

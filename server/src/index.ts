@@ -1,12 +1,37 @@
+import * as fs from 'fs'
+import * as path from 'path'
+import { execSync } from 'child_process'
 import { SessionManager } from './session-manager'
-import { HttpApiServer } from './http-server'
+import { HttpApiServer, TlsOptions } from './http-server'
 import { getProjects, getServerToken, getServerPort, getTelegramConfig } from './store'
 import { TelegramBridge } from './telegram-bot'
 
+function ensureTlsCerts(): TlsOptions {
+  const dataDir = process.env.SM_DATA_DIR || process.cwd()
+  const certDir = path.join(dataDir, 'certs')
+  const keyPath = process.env.SSL_KEY || path.join(certDir, 'server.key')
+  const certPath = process.env.SSL_CERT || path.join(certDir, 'server.crt')
+
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    console.log(`Using TLS certs from ${certDir}`)
+    return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+  }
+
+  console.log('Generating self-signed TLS certificate...')
+  if (!fs.existsSync(certDir)) fs.mkdirSync(certDir, { recursive: true })
+  execSync(
+    `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 365 -nodes -subj "/CN=sessionmanager"`,
+    { stdio: 'pipe' }
+  )
+  console.log(`TLS certs saved to ${certDir}`)
+  return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+}
+
+const tlsOptions = ensureTlsCerts()
 const port = parseInt(process.env.PORT || String(getServerPort()), 10)
 const token = process.env.SM_TOKEN || getServerToken()
 
-console.log('=== Session Manager Server ===')
+console.log('=== Session Manager Server (HTTPS) ===')
 console.log(`Port:  ${port}`)
 console.log(`Token: ${token}`)
 console.log('')
@@ -31,10 +56,10 @@ for (const project of projects) {
   }
 }
 
-const server = new HttpApiServer(sessionManager, port, token)
+const server = new HttpApiServer(sessionManager, port, token, tlsOptions)
 server.start().then(() => {
-  console.log(`\nServer listening on http://0.0.0.0:${port}`)
-  console.log(`Web UI: http://localhost:${port}`)
+  console.log(`\nServer listening on https://0.0.0.0:${port}`)
+  console.log(`Web UI: https://localhost:${port}`)
   console.log(`\nUse token above to authenticate.`)
 })
 

@@ -312,7 +312,7 @@ async function init(): Promise<void> {
       running: httpServer?.isRunning() ?? false,
       port: httpServer?.getPort() ?? s.serverPort ?? 7543,
       token: s.serverToken,
-      url: `http://127.0.0.1:${httpServer?.getPort() ?? s.serverPort ?? 7543}`
+      url: `https://127.0.0.1:${httpServer?.getPort() ?? s.serverPort ?? 7543}`
     }
   })
 

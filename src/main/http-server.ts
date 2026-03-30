@@ -1,6 +1,8 @@
 import * as http from 'http'
+import * as https from 'https'
 import * as fs from 'fs'
 import * as path from 'path'
+import { execSync } from 'child_process'
 import type { SessionManager } from './session-manager'
 import { getProjects } from './store'
 
@@ -22,7 +24,7 @@ interface SseClient {
 }
 
 export class HttpApiServer {
-  private server: http.Server | null = null
+  private server: https.Server | null = null
   private clients: SseClient[] = []
   private clientIdCounter = 0
   private sessionManager: SessionManager
@@ -36,9 +38,28 @@ export class HttpApiServer {
     this.token = token
   }
 
+  private getTlsOptions(): { key: Buffer; cert: Buffer } {
+    const { app } = require('electron')
+    const certDir = path.join(app.getPath('userData'), 'certs')
+    const keyPath = path.join(certDir, 'server.key')
+    const certPath = path.join(certDir, 'server.crt')
+
+    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+      return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+    }
+
+    if (!fs.existsSync(certDir)) fs.mkdirSync(certDir, { recursive: true })
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 365 -nodes -subj "/CN=sessionmanager"`,
+      { stdio: 'pipe' }
+    )
+    return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }
+  }
+
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.server = http.createServer((req, res) => this.handleRequest(req, res))
+      const tlsOptions = this.getTlsOptions()
+      this.server = https.createServer(tlsOptions, (req, res) => this.handleRequest(req, res))
       this.server.listen(this.port, '127.0.0.1', () => {
         this.running = true
         this.bindSessionEvents()
@@ -96,7 +117,7 @@ export class HttpApiServer {
   private authenticate(req: http.IncomingMessage): boolean {
     const auth = req.headers['authorization']
     if (auth?.startsWith('Bearer ') && auth.slice(7) === this.token) return true
-    const url = new URL(req.url || '/', `http://127.0.0.1:${this.port}`)
+    const url = new URL(req.url || '/', `https://127.0.0.1:${this.port}`)
     if (url.searchParams.get('token') === this.token) return true
     return false
   }
@@ -122,7 +143,7 @@ export class HttpApiServer {
       return
     }
 
-    const url = new URL(req.url || '/', `http://127.0.0.1:${this.port}`)
+    const url = new URL(req.url || '/', `https://127.0.0.1:${this.port}`)
     const urlPath = url.pathname
 
     // Only require auth for /api/ routes
