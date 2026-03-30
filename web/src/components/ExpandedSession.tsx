@@ -64,6 +64,110 @@ function SidebarItem({
   )
 }
 
+// Mobile virtual keyboard bar
+function MobileKeybar({
+  onSend,
+}: {
+  onSend: (data: string) => void
+}) {
+  const [mods, setMods] = useState<{ ctrl: boolean; alt: boolean; meta: boolean }>({
+    ctrl: false,
+    alt: false,
+    meta: false,
+  })
+
+  const toggleMod = (key: 'ctrl' | 'alt' | 'meta') => {
+    setMods((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const clearMods = () => setMods({ ctrl: false, alt: false, meta: false })
+
+  // Build CSI modifier param: 1 + sum of (Shift=1, Alt=2, Ctrl=4, Meta=8)
+  const modParam = () => {
+    let m = 0
+    if (mods.alt) m += 2
+    if (mods.ctrl) m += 4
+    if (mods.meta) m += 8
+    return m
+  }
+
+  const sendArrow = (code: string) => {
+    const m = modParam()
+    if (m > 0) {
+      onSend(`\x1b[1;${1 + m}${code}`)
+    } else {
+      onSend(`\x1b[${code}`)
+    }
+    clearMods()
+  }
+
+  const sendSpecial = (seq: string) => {
+    onSend(seq)
+    clearMods()
+  }
+
+  const modBtn = (label: string, key: 'ctrl' | 'alt' | 'meta') => (
+    <button
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => toggleMod(key)}
+      className={`
+        px-2.5 py-2 rounded text-xs font-medium transition-all select-none
+        ${mods[key]
+          ? 'bg-accent-green/20 text-accent-green border border-accent-green/40'
+          : 'bg-bg-overlay text-text-muted border border-border-subtle active:bg-bg-overlay/80'
+        }
+      `}
+    >
+      {label}
+    </button>
+  )
+
+  const arrowBtn = (label: string, code: string) => (
+    <button
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => sendArrow(code)}
+      className="w-9 h-9 flex items-center justify-center rounded bg-bg-overlay text-text-muted border border-border-subtle active:bg-accent-green/20 active:text-accent-green transition-all select-none text-sm"
+    >
+      {label}
+    </button>
+  )
+
+  return (
+    <div className="md:hidden flex items-center gap-1.5 px-2 py-1.5 bg-bg-card border-t border-border-subtle overflow-x-auto flex-shrink-0">
+      {/* Modifier keys */}
+      {modBtn('Ctrl', 'ctrl')}
+      {modBtn('⌥ Opt', 'alt')}
+      {modBtn('⌘ Cmd', 'meta')}
+
+      <div className="w-px h-6 bg-border-subtle mx-0.5" />
+
+      {/* Special keys */}
+      <button
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => sendSpecial('\x1b')}
+        className="px-2.5 py-2 rounded text-xs font-medium bg-bg-overlay text-text-muted border border-border-subtle active:bg-bg-overlay/80 transition-all select-none"
+      >
+        Esc
+      </button>
+      <button
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => sendSpecial('\t')}
+        className="px-2.5 py-2 rounded text-xs font-medium bg-bg-overlay text-text-muted border border-border-subtle active:bg-bg-overlay/80 transition-all select-none"
+      >
+        Tab
+      </button>
+
+      <div className="w-px h-6 bg-border-subtle mx-0.5" />
+
+      {/* Arrow keys */}
+      {arrowBtn('←', 'D')}
+      {arrowBtn('↓', 'B')}
+      {arrowBtn('↑', 'A')}
+      {arrowBtn('→', 'C')}
+    </div>
+  )
+}
+
 interface ExpandedSessionProps {
   sessionId: string
 }
@@ -316,6 +420,16 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
           className="flex-1 overflow-hidden p-1"
           style={{ background: '#0d1117' }}
           onClick={() => terminalRef.current?.focus()}
+        />
+
+        {/* Mobile virtual keyboard bar */}
+        <MobileKeybar
+          onSend={(data) => {
+            if (config) {
+              sendInput(config, activeSessionId, data).catch(() => {})
+            }
+            terminalRef.current?.focus()
+          }}
         />
       </div>
 

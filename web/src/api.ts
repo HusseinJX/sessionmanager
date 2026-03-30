@@ -1,4 +1,4 @@
-import type { ServerConfig, Project, SessionStatus } from './types'
+import type { ServerConfig, Project, SessionStatus, TaskItem } from './types'
 
 export async function fetchProjects(config: ServerConfig): Promise<Project[]> {
   // Try /api/projects first (includes parentSessionId, full structure)
@@ -168,4 +168,75 @@ export async function resizeSession(
 
 export function sseUrl(config: ServerConfig): string {
   return `${config.url}/api/events?token=${encodeURIComponent(config.token)}`
+}
+
+// --- Task API ---
+
+export async function fetchTasks(
+  config: ServerConfig,
+  projectId: string
+): Promise<TaskItem[]> {
+  const res = await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}/tasks`,
+    { headers: { Authorization: `Bearer ${config.token}` } }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<TaskItem[]>
+}
+
+export async function addTaskApi(
+  config: ServerConfig,
+  projectId: string,
+  task: { title: string; description?: string; status?: string }
+): Promise<TaskItem> {
+  const res = await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}/tasks`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(task),
+    }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<TaskItem>
+}
+
+export async function updateTaskApi(
+  config: ServerConfig,
+  projectId: string,
+  taskId: string,
+  updates: Partial<TaskItem>
+): Promise<TaskItem> {
+  const res = await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}` +
+      `/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updates),
+    }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<TaskItem>
+}
+
+export async function deleteTaskApi(
+  config: ServerConfig,
+  projectId: string,
+  taskId: string
+): Promise<void> {
+  await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}` +
+      `/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${config.token}` },
+    }
+  )
 }

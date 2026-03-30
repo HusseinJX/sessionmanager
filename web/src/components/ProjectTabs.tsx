@@ -21,7 +21,11 @@ export default function ProjectTabs() {
     layoutMode,
     setLayoutMode,
     disconnect,
+    projectViewMode,
+    setProjectViewMode,
   } = useAppStore()
+
+  const viewMode = activeProjectId ? (projectViewMode[activeProjectId] ?? 'terminals') : 'terminals'
 
   const projectHasWaiting = (projectId: string): boolean =>
     Object.values(sessionStates).some((s) => s.projectId === projectId && s.inputWaiting)
@@ -92,9 +96,39 @@ export default function ProjectTabs() {
 
       <div className="flex-1" />
 
+      {/* View toggle: Terminals / Planner */}
+      {activeProjectId && (
+        <div className="flex items-center bg-bg-overlay rounded border border-border-subtle overflow-hidden mr-1">
+          <button
+            className={`px-2 py-1 text-xs transition-colors ${
+              viewMode === 'terminals'
+                ? 'bg-accent-green/15 text-accent-green font-medium'
+                : 'text-text-muted hover:text-text-primary'
+            }`}
+            onClick={() => setProjectViewMode(activeProjectId, 'terminals')}
+            title="Terminal grid (Cmd+Shift+P to toggle)"
+          >
+            <span className="hidden sm:inline">Terminals</span>
+            <span className="sm:hidden">&#x2395;</span>
+          </button>
+          <button
+            className={`px-2 py-1 text-xs transition-colors ${
+              viewMode === 'planner'
+                ? 'bg-accent-green/15 text-accent-green font-medium'
+                : 'text-text-muted hover:text-text-primary'
+            }`}
+            onClick={() => setProjectViewMode(activeProjectId, 'planner')}
+            title="Planner board (Cmd+Shift+P to toggle)"
+          >
+            <span className="hidden sm:inline">Planner</span>
+            <span className="sm:hidden">&#x2630;</span>
+          </button>
+        </div>
+      )}
+
       {/* Layout toggle */}
       <button
-        className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors font-mono"
+        className={`px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors font-mono ${viewMode === 'planner' ? 'hidden' : ''}`}
         onClick={cycleLayout}
         title={`Layout: ${LAYOUT_TITLES[layoutMode]} (click to cycle)`}
       >

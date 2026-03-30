@@ -171,6 +171,20 @@ export function addTask(
   return newTask
 }
 
+export function updateTask(
+  projectId: string,
+  taskId: string,
+  updates: Partial<Omit<TaskItem, 'id' | 'createdAt'>>
+): TaskItem | null {
+  const project = store().projects.find((p) => p.id === projectId)
+  if (!project) return null
+  const task = (project.tasks ?? []).find((t) => t.id === taskId)
+  if (!task) return null
+  Object.assign(task, updates)
+  save()
+  return task
+}
+
 export function removeTask(projectId: string, taskId: string): void {
   const project = store().projects.find((p) => p.id === projectId)
   if (project) {

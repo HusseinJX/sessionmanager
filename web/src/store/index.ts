@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Project, SessionStatus, ServerConfig } from '../types'
+import type { Project, SessionStatus, ServerConfig, TaskItem } from '../types'
 
 const STORAGE_KEY = 'sessionmanager_config'
 const MAX_LOG_LINES = 150
@@ -57,6 +57,8 @@ interface AppState {
   activeProjectId: string | null
   expandedSessionId: string | null
   layoutMode: 'auto' | '1' | '2' | '3'
+  projectViewMode: Record<string, 'terminals' | 'planner'>
+  projectTasks: Record<string, TaskItem[]>
 
   // Actions — connection
   setConfig: (config: ServerConfig | null) => void
@@ -77,6 +79,14 @@ interface AppState {
   setActiveProject: (id: string | null) => void
   setExpandedSession: (id: string | null) => void
   setLayoutMode: (mode: 'auto' | '1' | '2' | '3') => void
+  setProjectViewMode: (projectId: string, mode: 'terminals' | 'planner') => void
+  getProjectViewMode: (projectId: string) => 'terminals' | 'planner'
+
+  // Actions — tasks
+  setProjectTasks: (projectId: string, tasks: TaskItem[]) => void
+  addTaskToProject: (projectId: string, task: TaskItem) => void
+  updateTaskInProject: (projectId: string, taskId: string, updates: Partial<TaskItem>) => void
+  removeTaskFromProject: (projectId: string, taskId: string) => void
 
   // Helpers
   getActiveProject: () => Project | null
@@ -110,6 +120,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   activeProjectId: null,
   expandedSessionId: null,
   layoutMode: 'auto',
+  projectViewMode: {},
+  projectTasks: {},
 
   setConfig: (config) => {
     if (config) {
@@ -292,6 +304,46 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setLayoutMode: (mode) => set({ layoutMode: mode }),
+
+  setProjectViewMode: (projectId, mode) =>
+    set((state) => ({
+      projectViewMode: { ...state.projectViewMode, [projectId]: mode },
+    })),
+
+  getProjectViewMode: (projectId) => get().projectViewMode[projectId] ?? 'terminals',
+
+  // Task actions
+  setProjectTasks: (projectId, tasks) =>
+    set((state) => ({
+      projectTasks: { ...state.projectTasks, [projectId]: tasks },
+    })),
+
+  addTaskToProject: (projectId, task) =>
+    set((state) => ({
+      projectTasks: {
+        ...state.projectTasks,
+        [projectId]: [...(state.projectTasks[projectId] ?? []), task],
+      },
+    })),
+
+  updateTaskInProject: (projectId, taskId, updates) =>
+    set((state) => {
+      const tasks = state.projectTasks[projectId] ?? []
+      return {
+        projectTasks: {
+          ...state.projectTasks,
+          [projectId]: tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
+        },
+      }
+    }),
+
+  removeTaskFromProject: (projectId, taskId) =>
+    set((state) => ({
+      projectTasks: {
+        ...state.projectTasks,
+        [projectId]: (state.projectTasks[projectId] ?? []).filter((t) => t.id !== taskId),
+      },
+    })),
 
   getActiveProject: () => {
     const { projects, activeProjectId } = get()

@@ -5,6 +5,7 @@ import type { ServerConfig, SessionStatus } from './types'
 import ConnectionSetup from './components/ConnectionSetup'
 import ProjectTabs from './components/ProjectTabs'
 import TerminalGrid from './components/TerminalGrid'
+import PlannerBoard from './components/PlannerBoard'
 import ExpandedSession from './components/ExpandedSession'
 
 export default function App() {
@@ -13,6 +14,9 @@ export default function App() {
     connected,
     error,
     expandedSessionId,
+    activeProjectId,
+    projectViewMode,
+    setProjectViewMode,
     setConfig,
     setConnected,
     setError,
@@ -24,6 +28,8 @@ export default function App() {
     appendOutput,
     setSessionLogs,
   } = useAppStore()
+
+  const viewMode = activeProjectId ? (projectViewMode[activeProjectId] ?? 'terminals') : 'terminals'
 
   const sseRef = useRef<EventSource | null>(null)
 
@@ -118,6 +124,21 @@ export default function App() {
     }
   }, [config])
 
+  // Cmd+Shift+P / Ctrl+Shift+P to toggle Terminals/Planner
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'p') {
+        e.preventDefault()
+        if (activeProjectId) {
+          const current = projectViewMode[activeProjectId] ?? 'terminals'
+          setProjectViewMode(activeProjectId, current === 'terminals' ? 'planner' : 'terminals')
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [activeProjectId, projectViewMode, setProjectViewMode])
+
   if (!config) {
     return <ConnectionSetup onConnect={handleConnect} error={error} />
   }
@@ -148,7 +169,7 @@ export default function App() {
 
       {/* Main content */}
       <div className="flex-1 overflow-hidden relative">
-        <TerminalGrid />
+        {viewMode === 'planner' ? <PlannerBoard /> : <TerminalGrid />}
       </div>
 
       {/* Expanded session overlay */}

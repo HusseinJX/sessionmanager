@@ -759,3 +759,50 @@ Full keyboard-driven navigation system with customizable shortcuts.
 - **keybindings.ts:** Added `term.deleteWord` (Alt+Backspace) binding definition.
 
 **Files changed:** `FullTerminal.tsx`, `session-manager.ts`, `keybindings.ts`
+
+---
+
+## Checkpoint 30 — Mobile virtual keyboard bar for web view
+
+Added a `MobileKeybar` component to the expanded terminal view (`ExpandedSession.tsx`) that shows only on mobile screens (hidden at `md:` breakpoint).
+
+**Buttons:**
+- **Ctrl, ⌥ Opt, ⌘ Cmd** — sticky modifier toggles (highlight green when active, auto-clear after use)
+- **Esc, Tab** — send escape sequences directly
+- **← ↓ ↑ →** — arrow keys with modifier support (e.g. Ctrl+Arrow sends word-jump sequences)
+
+**Implementation details:**
+- Modifier keys combine using standard CSI encoding (Alt=2, Ctrl=4, Meta=8)
+- All buttons use `onMouseDown preventDefault` to avoid stealing focus from the terminal
+- Terminal is re-focused after each button press
+- Bar sits at bottom of terminal area, scrollable horizontally if needed
+
+**Files changed:** `web/src/components/ExpandedSession.tsx`
+
+---
+
+## Checkpoint 31 — Planner board for web view with keyboard shortcut
+
+Added full Planner (Kanban board) support to the web view, matching the native Electron app's functionality.
+
+**What was added:**
+
+1. **Server: task update endpoint** — Added `updateTask()` to `server/src/store.ts` and a `PUT /api/projects/:pid/tasks/:tid` endpoint to `http-server.ts`. Previously only create/delete existed.
+
+2. **Web types & API** — Added `TaskItem`, `TaskStatus` types to `web/src/types.ts`. Added `fetchTasks`, `addTaskApi`, `updateTaskApi`, `deleteTaskApi` to `web/src/api.ts`.
+
+3. **Web store** — Added `projectViewMode` (per-project terminals/planner toggle), `projectTasks` state, and CRUD actions (`setProjectTasks`, `addTaskToProject`, `updateTaskInProject`, `removeTaskFromProject`) to `web/src/store/index.ts`.
+
+4. **PlannerBoard component** (`web/src/components/PlannerBoard.tsx`) — Full Kanban board with 4 columns (Backlog, Todo, In Progress, Done). Features:
+   - Drag & drop between columns
+   - Quick-add card in any column
+   - Inline task editing (title, description, command, assigned session)
+   - Session filter dropdown
+   - Mobile-responsive: columns stack vertically on mobile with collapsible headers
+   - Task action buttons always visible on mobile (hover-reveal on desktop)
+
+5. **View toggle** — Added Terminals/Planner toggle buttons to `ProjectTabs.tsx`. Layout toggle hidden when in Planner view. Mobile shows icon-only buttons.
+
+6. **Keyboard shortcut** — `Cmd+Shift+P` (or `Ctrl+Shift+P`) toggles between Terminals and Planner views, wired in `App.tsx`.
+
+**Files changed:** `server/src/store.ts`, `server/src/http-server.ts`, `web/src/types.ts`, `web/src/api.ts`, `web/src/store/index.ts`, `web/src/components/PlannerBoard.tsx` (new), `web/src/components/ProjectTabs.tsx`, `web/src/App.tsx`

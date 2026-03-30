@@ -2,7 +2,7 @@ import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTasksForProject, addTask, removeTask } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTasksForProject, addTask, updateTask, removeTask } from './store'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -373,6 +373,22 @@ export class HttpApiServer {
           })
           this.json(res, 201, task)
         } catch (err) {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
+    // PUT /api/projects/:pid/tasks/:tid
+    const taskUpdateMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)$/)
+    if (req.method === 'PUT' && taskUpdateMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const updates = JSON.parse(body) as Record<string, unknown>
+          const task = updateTask(taskUpdateMatch[1], taskUpdateMatch[2], updates)
+          if (!task) return this.json(res, 404, { error: 'Task not found' })
+          this.json(res, 200, task)
+        } catch {
           this.json(res, 400, { error: 'Invalid JSON' })
         }
       })
