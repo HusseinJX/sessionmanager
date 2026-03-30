@@ -38,6 +38,7 @@ export interface StoreData {
   serverPort: number
   telegramBotToken?: string
   telegramChatId?: string
+  telegramNotificationsEnabled?: boolean
 }
 
 const STORE_PATH = path.join(process.env.SM_DATA_DIR || process.cwd(), 'data.json')
@@ -131,6 +132,16 @@ export function setTelegramConfig(botToken: string, chatId: string): void {
   const s = store()
   s.telegramBotToken = botToken
   s.telegramChatId = chatId
+  save()
+}
+
+export function getTelegramNotificationsEnabled(): boolean {
+  const s = store()
+  return s.telegramNotificationsEnabled !== false // default true
+}
+
+export function setTelegramNotificationsEnabled(enabled: boolean): void {
+  store().telegramNotificationsEnabled = enabled
   save()
 }
 

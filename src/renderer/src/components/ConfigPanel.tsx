@@ -257,6 +257,7 @@ export default function ConfigPanel(): React.ReactElement {
   } | null>(null)
   const [tokenVisible, setTokenVisible] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
+  const [tgNotifications, setTgNotifications] = useState<boolean | null>(null)
 
   const startRecording = (): void => {
     setPendingHotkey(null)
@@ -291,7 +292,15 @@ export default function ConfigPanel(): React.ReactElement {
   // Load server info when settings tab is shown
   useEffect(() => {
     if (tab === 'settings') {
-      window.api.getServerInfo().then(setServerInfo).catch(() => setServerInfo(null))
+      window.api.getServerInfo().then((info) => {
+        setServerInfo(info)
+        fetch(`${info.url}/api/telegram/notifications`, {
+          headers: { Authorization: `Bearer ${info.token}` }
+        })
+          .then((r) => r.json() as Promise<{ enabled: boolean }>)
+          .then((d) => setTgNotifications(d.enabled))
+          .catch(() => setTgNotifications(null))
+      }).catch(() => setServerInfo(null))
     }
   }, [tab])
 
@@ -559,6 +568,34 @@ export default function ConfigPanel(): React.ReactElement {
                   <p className="text-xs text-text-muted italic">Loading server info…</p>
                 )}
               </div>
+
+              {/* Telegram notifications toggle */}
+              {tgNotifications !== null && (
+                <div className="border-t border-border-subtle pt-4">
+                  <p className="text-sm font-medium text-text-primary mb-1">Telegram</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-muted">Input-waiting notifications</span>
+                    <button
+                      onClick={() => {
+                        if (!serverInfo) return
+                        const next = !tgNotifications
+                        setTgNotifications(next)
+                        fetch(`${serverInfo.url}/api/telegram/notifications`, {
+                          method: 'POST',
+                          headers: {
+                            Authorization: `Bearer ${serverInfo.token}`,
+                            'Content-Type': 'application/json'
+                          },
+                          body: JSON.stringify({ enabled: next })
+                        }).catch(() => setTgNotifications(!next))
+                      }}
+                      className={`relative w-8 h-4 rounded-full transition-colors ${tgNotifications ? 'bg-accent-green' : 'bg-border-subtle'}`}
+                    >
+                      <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${tgNotifications ? 'left-4' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </>
           )}
 

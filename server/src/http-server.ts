@@ -3,7 +3,7 @@ import * as https from 'https'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTasksForProject, addTask, updateTask, removeTask } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask } from './store'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -426,6 +426,27 @@ export class HttpApiServer {
           if (!botToken || !chatId) return this.json(res, 400, { error: 'botToken and chatId required' })
           setTelegramConfig(botToken, chatId)
           this.json(res, 200, { ok: true, note: 'Restart server to connect bot' })
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
+    // GET /api/telegram/notifications
+    if (req.method === 'GET' && urlPath === '/api/telegram/notifications') {
+      this.json(res, 200, { enabled: getTelegramNotificationsEnabled() })
+      return
+    }
+
+    // POST /api/telegram/notifications — { enabled: boolean }
+    if (req.method === 'POST' && urlPath === '/api/telegram/notifications') {
+      this.readBody(req).then((body) => {
+        try {
+          const { enabled } = JSON.parse(body) as { enabled: boolean }
+          if (typeof enabled !== 'boolean') return this.json(res, 400, { error: 'enabled must be boolean' })
+          setTelegramNotificationsEnabled(enabled)
+          this.json(res, 200, { ok: true, enabled })
         } catch {
           this.json(res, 400, { error: 'Invalid JSON' })
         }

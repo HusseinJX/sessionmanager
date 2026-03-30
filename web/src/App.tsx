@@ -1,6 +1,6 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useAppStore } from './store'
-import { fetchProjects, fetchLogs, sseUrl } from './api'
+import { fetchProjects, fetchLogs, sseUrl, fetchTelegramNotifications, setTelegramNotifications } from './api'
 import type { ServerConfig, SessionStatus } from './types'
 import ConnectionSetup from './components/ConnectionSetup'
 import ProjectTabs from './components/ProjectTabs'
@@ -32,6 +32,21 @@ export default function App() {
   const viewMode = activeProjectId ? (projectViewMode[activeProjectId] ?? 'terminals') : 'terminals'
 
   const sseRef = useRef<EventSource | null>(null)
+
+  const [showSettings, setShowSettings] = useState(false)
+  const [tgNotifications, setTgNotifications] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (!config || !showSettings) return
+    fetchTelegramNotifications(config).then(setTgNotifications).catch(() => setTgNotifications(null))
+  }, [config, showSettings])
+
+  const toggleTgNotifications = useCallback(async () => {
+    if (!config || tgNotifications === null) return
+    const next = !tgNotifications
+    setTgNotifications(next)
+    await setTelegramNotifications(config, next).catch(() => setTgNotifications(!next))
+  }, [config, tgNotifications])
 
   const handleConnect = useCallback((cfg: ServerConfig) => {
     setConfig(cfg)
@@ -161,6 +176,33 @@ export default function App() {
           ) : (
             <span className="text-xs text-text-muted">connecting...</span>
           )}
+          <div className="relative">
+            <button
+              className="text-xs text-text-muted hover:text-text-primary px-1.5 py-0.5 rounded transition-colors"
+              onClick={() => setShowSettings((v) => !v)}
+              title="Settings"
+            >
+              ⚙
+            </button>
+            {showSettings && (
+              <div className="absolute right-0 top-full mt-1 w-56 bg-bg-card border border-border-subtle rounded shadow-lg z-50 p-3">
+                <p className="text-xs font-medium text-text-primary mb-2">Notifications</p>
+                <label className="flex items-center justify-between gap-2 cursor-pointer">
+                  <span className="text-xs text-text-muted">Telegram alerts</span>
+                  {tgNotifications === null ? (
+                    <span className="text-xs text-text-muted">…</span>
+                  ) : (
+                    <button
+                      onClick={toggleTgNotifications}
+                      className={`relative w-8 h-4 rounded-full transition-colors ${tgNotifications ? 'bg-accent-green' : 'bg-border-subtle'}`}
+                    >
+                      <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${tgNotifications ? 'left-4' : 'left-0.5'}`} />
+                    </button>
+                  )}
+                </label>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

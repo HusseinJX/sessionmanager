@@ -2,7 +2,7 @@ import TelegramBot from 'node-telegram-bot-api'
 import OpenAI from 'openai'
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions'
 import type { SessionManager } from './session-manager'
-import { getProjects, addTask, getTasksForProject } from './store'
+import { getProjects, addTask, getTasksForProject, getTelegramNotificationsEnabled } from './store'
 
 export interface TelegramConfig {
   botToken: string
@@ -442,6 +442,7 @@ export class TelegramBridge {
 
   private async notifyInputWaiting(sessionId: string): Promise<void> {
     if (!this.bot) return
+    if (!getTelegramNotificationsEnabled()) return
     // Don't notify for the switched terminal — user is already talking to it
     if (this.switchedSessionId === sessionId) return
 

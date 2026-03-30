@@ -170,6 +170,27 @@ export function sseUrl(config: ServerConfig): string {
   return `${config.url}/api/events?token=${encodeURIComponent(config.token)}`
 }
 
+export async function fetchTelegramNotifications(config: ServerConfig): Promise<boolean> {
+  const res = await fetch(`${config.url}/api/telegram/notifications`, {
+    headers: { Authorization: `Bearer ${config.token}` },
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = (await res.json()) as { enabled: boolean }
+  return data.enabled
+}
+
+export async function setTelegramNotifications(config: ServerConfig, enabled: boolean): Promise<void> {
+  const res = await fetch(`${config.url}/api/telegram/notifications`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
 // --- Task API ---
 
 export async function fetchTasks(
