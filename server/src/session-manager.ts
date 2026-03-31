@@ -44,6 +44,7 @@ interface PtySession {
   hadInput: boolean
   currentCwd?: string
   pendingInputCheck: boolean
+  lastWriteBufferIdx: number  // outputBuffer.length at time of last write — used for delta reads
 }
 
 const IDLE_MS = 1500
@@ -145,6 +146,16 @@ function cleanTuiNoise(lines: string[]): string[] {
     if (t.length <= 5 && !/\s/.test(t) && /[^a-zA-Z0-9]/.test(t)) return false
     // ↓tomanage / ·1shell type fragments
     if (/^[·↓↑]/.test(t) && t.length < 30) return false
+    // Claude Code header chrome: "claude (vX.Y.Z) · model · tokens · /conversation-id"
+    if (/^claude\s*\(v[\d.]+\)/i.test(t)) return false
+    // Token counter lines: "12.3k tokens" or "↑ 1234 ↓ 567"
+    if (/\d+\.?\d*k?\s*tokens/i.test(t) && t.length < 80) return false
+    // Lines that are just numbers with arrows (cost/token displays)
+    if (/^[↑↓\s\d.,k]+$/.test(t) && t.length < 40) return false
+    // Claude Code "? for shortcuts" hint line
+    if (/\?\s*for\s*(shortcuts|help)/i.test(t)) return false
+    // "Auto-update available" and similar nag lines
+    if (/auto.?update/i.test(t) && t.length < 80) return false
     return true
   })
 }
@@ -263,6 +274,7 @@ export class SessionManager extends EventEmitter {
       lastOutputTime: Date.now(),
       activityBytes: 0,
       hadInput: !!meta.command,
+      lastWriteBufferIdx: 0,
     }
 
     this.sessions.set(meta.id, session)
@@ -328,6 +340,7 @@ export class SessionManager extends EventEmitter {
   writeToSession(id: string, data: string): boolean {
     const session = this.sessions.get(id)
     if (!session) return false
+    session.lastWriteBufferIdx = session.outputBuffer.length
     session.pty.write(data)
     session.hadInput = true
     session.activityBytes = 0
@@ -383,8 +396,21 @@ export class SessionManager extends EventEmitter {
     return this.extractRecentLines(session, n)
   }
 
+  /** Returns only the lines produced after the last writeToSession call — the actual response. */
+  getLinesSinceLastWrite(id: string, n: number): string[] | null {
+    const session = this.sessions.get(id)
+    if (!session) return null
+    const deltaChunks = session.outputBuffer.slice(session.lastWriteBufferIdx)
+    if (deltaChunks.length === 0) return []
+    return this.extractLinesFromChunks(deltaChunks, n)
+  }
+
   private extractRecentLines(session: PtySession, n: number): string[] {
-    const raw = session.outputBuffer.join('')
+    return this.extractLinesFromChunks(session.outputBuffer, n)
+  }
+
+  private extractLinesFromChunks(chunks: string[], n: number): string[] {
+    const raw = chunks.join('')
     const stripped = stripAnsi(raw)
     // Process carriage returns: text after \r overwrites from start of line
     const processed = stripped.split('\n').map((line) => {
