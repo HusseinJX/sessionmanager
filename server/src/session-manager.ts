@@ -156,6 +156,18 @@ function cleanTuiNoise(lines: string[]): string[] {
     if (/\?\s*for\s*(shortcuts|help)/i.test(t)) return false
     // "Auto-update available" and similar nag lines
     if (/auto.?update/i.test(t) && t.length < 80) return false
+    // Claude Code bottom status bar: "ModelName │ user │ [████░░]:XX%" or similar
+    if (/│/.test(t) && (/\d+%/.test(t) || /[█░▓▒]{2,}/.test(t))) return false
+    // Progress bar lines (block chars, with or without percentage)
+    if (/[█░▓▒]{3,}/.test(t)) return false
+    // Percentage-suffixed status tokens like ":17%" at end of short line
+    if (/:\d+%\s*$/.test(t) && t.length < 80) return false
+    // Shell prompt lines (❯ or › as prompt, with or without trailing status text)
+    // These appear from Claude Code's interactive prompt bar
+    if (/^[❯›](\s.*)?$/.test(t)) return false
+    // Residual right-column fragments left by cursor-position writes (e.g. "te:" "nd" "te")
+    // Already caught by the <=3 char filter above, but also catch short word-fragment+punct
+    if (/^[a-z]{1,4}[:.]\s*$/.test(t)) return false
     return true
   })
 }
