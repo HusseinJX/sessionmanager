@@ -99,12 +99,7 @@ async function isChildProcessWaitingForInput(shellPid: number): Promise<boolean>
 
 function stripAnsi(str: string): string {
   return str
-    // Replace cursor-positioning CSI sequences with a space (CUP, CHA, CUF, HVP)
-    // so text fragments at different screen positions don't concatenate without spacing
-    .replace(/\x1b\[[\d;]*[HfGC]/g, ' ')
-    // Erase-line sequences → newline so content on redrawn lines doesn't merge
-    .replace(/\x1b\[\d*K/g, '\n')
-    .replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, '')   // All remaining CSI sequences
+    .replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, '')   // All CSI sequences (including ?h, ?l, etc.)
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
     .replace(/\x1b[>=]/g, '')
     .replace(/\x1b[()][A-Z0-9]/g, '')
@@ -428,24 +423,98 @@ export class SessionManager extends EventEmitter {
 
   private extractLinesFromChunks(chunks: string[], n: number): string[] {
     const raw = chunks.join('')
-    const stripped = stripAnsi(raw)
-    // Process carriage returns: text after \r overwrites from start of line
-    const processed = stripped.split('\n').map((line) => {
-      if (!line.includes('\r')) return line
-      const parts = line.split('\r')
-      let result = parts[0]
-      for (let i = 1; i < parts.length; i++) {
-        const overwrite = parts[i]
-        if (overwrite.length === 0) continue
-        result = overwrite + result.slice(overwrite.length)
+
+    // Interpret raw PTY output using a simple screen buffer that handles
+    // cursor positioning, erase sequences, and carriage returns properly.
+    const COLS = 220
+    const screen: string[][] = [[]]  // array of rows, each row is array of chars by column
+    let row = 0
+    let col = 0
+
+    const ensureRow = (r: number) => {
+      while (screen.length <= r) screen.push([])
+    }
+    const putChar = (ch: string) => {
+      if (col >= COLS) { col = 0; row++; ensureRow(row) }
+      ensureRow(row)
+      screen[row][col] = ch
+      col++
+    }
+
+    let i = 0
+    while (i < raw.length) {
+      const ch = raw[i]
+
+      // ESC sequence
+      if (ch === '\x1b' && i + 1 < raw.length) {
+        if (raw[i + 1] === '[') {
+          // CSI sequence: collect params and final byte
+          let j = i + 2
+          let params = ''
+          while (j < raw.length && raw.charCodeAt(j) >= 0x20 && raw.charCodeAt(j) <= 0x3f) {
+            params += raw[j]; j++
+          }
+          if (j < raw.length) {
+            const final = raw[j]; j++
+            const nums = params.split(';').map(s => parseInt(s, 10) || 0)
+            switch (final) {
+              case 'H': case 'f': // CUP — cursor position (row;col, 1-based)
+                row = (nums[0] || 1) - 1; col = (nums[1] || 1) - 1; ensureRow(row); break
+              case 'A': row = Math.max(0, row - (nums[0] || 1)); break  // cursor up
+              case 'B': row += (nums[0] || 1); ensureRow(row); break     // cursor down
+              case 'C': col += (nums[0] || 1); break                     // cursor forward
+              case 'D': col = Math.max(0, col - (nums[0] || 1)); break   // cursor back
+              case 'G': col = (nums[0] || 1) - 1; break                  // CHA — cursor column
+              case 'J': {  // ED — erase display
+                const mode = nums[0] || 0
+                if (mode === 2 || mode === 3) { screen.length = 0; screen.push([]); row = 0; col = 0 }
+                break
+              }
+              case 'K': {  // EL — erase line
+                const mode = nums[0] || 0
+                ensureRow(row)
+                if (mode === 0) screen[row].length = col        // erase to end
+                else if (mode === 1) { for (let c = 0; c <= col; c++) screen[row][c] = ' ' }
+                else if (mode === 2) screen[row] = []           // erase whole line
+                break
+              }
+              // Ignore all other CSI sequences
+            }
+            i = j; continue
+          }
+        }
+        // OSC or other ESC sequences — skip
+        if (raw[i + 1] === ']') {
+          let j = i + 2
+          while (j < raw.length && raw[j] !== '\x07' && !(raw[j] === '\x1b' && raw[j + 1] === '\\')) j++
+          i = j + (raw[j] === '\x07' ? 1 : 2); continue
+        }
+        // Other ESC sequences — skip 2-3 bytes
+        i += 2; if (i < raw.length && raw.charCodeAt(i - 1) >= 0x20 && raw.charCodeAt(i - 1) <= 0x2f) i++
+        continue
       }
-      return result
-    }).join('\n')
+
+      // Control characters
+      if (ch === '\n') { row++; col = 0; ensureRow(row); i++; continue }
+      if (ch === '\r') { col = 0; i++; continue }
+      if (ch === '\t') { col = (Math.floor(col / 8) + 1) * 8; i++; continue }
+      if (ch.charCodeAt(0) < 0x20 || ch === '\x7f') { i++; continue }
+
+      // Printable character
+      putChar(ch)
+      i++
+    }
+
+    const lines = screen.map(row => {
+      // Fill gaps (sparse array) with spaces
+      const maxCol = row.length
+      let line = ''
+      for (let c = 0; c < maxCol; c++) line += row[c] || ' '
+      return line.trimEnd()
+    })
+
     return cleanTuiNoise(
-      processed
-        .split(/\r?\n/)
-        .map((l) => l.replace(/  +/g, ' ').trim())
-        .filter((l) => l.length > 0)
+      lines.filter((l) => l.length > 0)
     ).slice(-n)
   }
 
