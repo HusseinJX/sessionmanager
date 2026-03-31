@@ -145,9 +145,7 @@ export class TelegramBridge {
         const toSend = isBareKey ? msg.text.trim() : msg.text + '\r'
         this.sessionManager.writeToSession(this.switchedSessionId, toSend)
         const output = await this.waitForOutput(this.switchedSessionId, 2000, 120000, msg.text)
-        const sent = await this.bot.sendMessage(msg.chat.id, `\`[${escapeMarkdown(this.switchedLabel)}]\`\n\`$ ${escapeMarkdown(msg.text)}\`\n\`\`\`\n${output}\n\`\`\``, {
-          parse_mode: 'Markdown',
-        })
+        const sent = await this.bot.sendMessage(msg.chat.id, `[${this.switchedLabel}]\n$ ${msg.text}\n\n${output}`)
         messageToSession.set(sent.message_id, this.switchedSessionId)
         return
       }
@@ -159,8 +157,7 @@ export class TelegramBridge {
           const isBareKey = /^\d$/.test(msg.text.trim())
           this.sessionManager.writeToSession(sessionId, isBareKey ? msg.text.trim() : msg.text + '\r')
           const output = await this.waitForOutput(sessionId, 2000, 120000, msg.text)
-          const sent = await this.bot.sendMessage(msg.chat.id, `\`$ ${escapeMarkdown(msg.text)}\`\n\`\`\`\n${output}\n\`\`\``, {
-            parse_mode: 'Markdown',
+          const sent = await this.bot.sendMessage(msg.chat.id, `$ ${msg.text}\n\n${output}`, {
             reply_to_message_id: msg.message_id,
           })
           messageToSession.set(sent.message_id, sessionId)

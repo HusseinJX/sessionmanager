@@ -99,7 +99,12 @@ async function isChildProcessWaitingForInput(shellPid: number): Promise<boolean>
 
 function stripAnsi(str: string): string {
   return str
-    .replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, '')   // All CSI sequences (including ?h, ?l, etc.)
+    // Replace cursor-positioning CSI sequences with a space (CUP, CHA, CUF, HVP)
+    // so text fragments at different screen positions don't concatenate without spacing
+    .replace(/\x1b\[[\d;]*[HfGC]/g, ' ')
+    // Erase-line sequences → newline so content on redrawn lines doesn't merge
+    .replace(/\x1b\[\d*K/g, '\n')
+    .replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]/g, '')   // All remaining CSI sequences
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
     .replace(/\x1b[>=]/g, '')
     .replace(/\x1b[()][A-Z0-9]/g, '')
@@ -439,7 +444,7 @@ export class SessionManager extends EventEmitter {
     return cleanTuiNoise(
       processed
         .split(/\r?\n/)
-        .map((l) => l.trimEnd())
+        .map((l) => l.replace(/  +/g, ' ').trim())
         .filter((l) => l.length > 0)
     ).slice(-n)
   }
