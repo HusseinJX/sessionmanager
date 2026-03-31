@@ -850,3 +850,27 @@ Switched both the standalone server (`server/src/`) and Electron server (`src/ma
   - `Alt+Arrow/key` → send readline escape sequences (`\x1bb`, `\x1bf`, etc.)
 - Added `term.attachCustomKeyEventHandler` to block metaKey and altKey events from xterm.js internal processing
 - Added `beforeinput` blocker on xterm's textarea to prevent macOS input-method character injection when Alt is held
+
+---
+
+## Checkpoint — Telegram first-class integration (clean Claude replies)
+
+**Problem:** Replies in Telegram switch mode were garbage — full of thinking fragments, spinner frames, old history, and Claude Code's bottom status bar (`Haiku4.5 │ root │ ████:17%` repeated).
+
+**Root cause:** `waitForOutput` was reading the last 30 lines of ALL historical scrollback, not just what arrived after the command was sent.
+
+**Fixes across `server/src/session-manager.ts` and `server/src/telegram-bot.ts`:**
+
+1. **Delta output tracking** — added `lastWriteBufferIdx` to `PtySession`. Set on every `writeToSession` call. New `getLinesSinceLastWrite()` method returns only PTY chunks after the last command, not full history.
+
+2. **Echo stripping** — `waitForOutput` now accepts `sentCommand` and strips the echoed input from the top of the delta response.
+
+3. **Centralised cleaning** — removed duplicate `cleanTerminalOutput` from `telegram-bot.ts`. All noise filtering now lives in `cleanTuiNoise` in session-manager.
+
+4. **Status bar filters** added to `cleanTuiNoise`:
+   - `ModelName │ user │ ████:17%` status bar rows
+   - Block character progress bars (`███░░`)
+   - `:XX%` suffixed tokens
+   - `❯`/`›` prompt lines (with or without trailing status text)
+   - Short cursor-overwrite residue fragments (`te:`, `nd`, etc.)
+   - Claude Code header chrome (version/model/token counts)
