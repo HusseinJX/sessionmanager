@@ -874,3 +874,51 @@ Switched both the standalone server (`server/src/`) and Electron server (`src/ma
    - `❯`/`›` prompt lines (with or without trailing status text)
    - Short cursor-overwrite residue fragments (`te:`, `nd`, etc.)
    - Claude Code header chrome (version/model/token counts)
+
+---
+
+## Checkpoint — Telegram virtual screen buffer & stable plain-text output (GOOD STATE)
+
+**Commit:** `55b8a90` — `feat: virtual screen buffer for proper TUI output extraction in Telegram`
+
+**Status:** Deployed to droplet `64.23.191.7`, service running. This is a known-good baseline.
+
+**What works:**
+- Virtual screen buffer (`extractLinesFromChunks`) interprets raw PTY output through a proper terminal emulator (cursor movement, ANSI CSI sequences, erase-line/display, etc.) instead of naive string splitting
+- `cleanTuiNoise` filters out Claude Code chrome: spinners, box-drawing, status bars, thinking indicators, loading words, prompt hints, progress bars, short garbled fragments
+- Delta output tracking (`lastWriteBufferIdx` / `getLinesSinceLastWrite`) ensures Telegram only sees the response to the latest command, not full scrollback history
+- Echo stripping removes the command echoed back by the terminal
+- Switch mode sends output as **plain text** (no Markdown code blocks) — this is intentional; user prefers in-chat readable text over monospace code blocks
+- Reply-to-message mode also uses plain text
+- Shorthand mode (`a1:cmd`) uses Markdown with code blocks (different UX, that's fine)
+- Input-waiting notifications with `⚠️ Input needed` and reply routing
+- Single-digit messages sent as bare keystrokes (for numbered menus like Claude Code permission prompts)
+
+**Architecture:**
+- `session-manager.ts`: PTY management, virtual screen buffer, TUI noise filtering, delta tracking
+- `telegram-bot.ts`: Telegram Bot API integration, switch/shorthand/reply modes, LLM routing, input-waiting notifications
+- Output pipeline: PTY chunks → `outputBuffer[]` → `extractLinesFromChunks()` (virtual screen) → `cleanTuiNoise()` → Telegram message
+
+**Known minor issues (not blockers):**
+- URLs in plain-text switch mode get auto-linked by Telegram (cosmetic, not functional)
+- Very long outputs truncated to last 30 lines
+---
+
+## Checkpoint — Codex-style sidebar layout
+
+Redesigned UI to match Codex/t3code aesthetic with a vertical left sidebar for projects.
+
+**Changes made:**
+- **New `ProjectSidebar.tsx`** — 220px left panel with:
+  - macOS traffic light window controls (close/min/max) embedded at top
+  - "Projects" section header
+  - Project list with folder icons, active left-border indicator (green), session count badge, rename/delete on hover
+  - Waiting indicator (pulsing red dot) per project
+  - "+ New Project" and "Settings" buttons at bottom with icons
+- **`App.tsx`** — Changed from `flex-col` to `flex-row` layout. Removed old titlebar + `ProjectTabs`. Sidebar is left column; right column has `MainTopBar` + content area.
+- **New `MainTopBar`** in `App.tsx` — Slim 44px drag region showing active project name, Terminals/Planner toggle, layout toggle, and "+ Terminal" button. All within the drag region with `no-drag` overrides on interactive elements.
+- **Removed `ProjectTabs.tsx`** from App render (file still exists but no longer mounted).
+- **`tailwind.config.js`** — Darker palette: `bg-base: #0d0d0f`, `sidebar: #111113`, `bg-card: #141416`, border/text updated to match.
+- **`main.css`** — Background and scrollbar colors updated to match new palette; font updated to prefer `Inter`.
+
+**TypeScript:** Zero errors on `tsc --noEmit` and `tsc -p tsconfig.web.json --noEmit`.

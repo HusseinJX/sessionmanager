@@ -1,7 +1,7 @@
-import React, { useEffect, useCallback } from 'react'
+import React, { useEffect } from 'react'
 import { useAppStore } from './store'
 import { matchesBinding } from './keybindings'
-import ProjectTabs from './components/ProjectTabs'
+import ProjectSidebar from './components/ProjectSidebar'
 import TerminalGrid from './components/TerminalGrid'
 import FullTerminal from './components/FullTerminal'
 import AddSessionModal from './components/AddSessionModal'
@@ -195,7 +195,6 @@ function handleQuickTerminal(): void {
 export default function App(): React.ReactElement {
   const {
     projects,
-    sessionStates,
     expandedSessionId,
     showAddSessionModal,
     showAddProjectModal,
@@ -210,7 +209,6 @@ export default function App(): React.ReactElement {
     updateSessionCwd,
     appendPreviewLine,
     setSettings,
-    settings
   } = useAppStore()
 
   // Load initial state from main process and restart all pty processes
@@ -464,97 +462,23 @@ export default function App(): React.ReactElement {
   const hasProjects = projects.length > 0
 
   return (
-    <div className="flex flex-col h-screen bg-bg-base text-text-primary overflow-hidden">
-      {/* Title bar drag region */}
-      <div
-        className="flex items-center justify-between px-3 py-2 bg-bg-card border-b border-border-subtle"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      >
-        {/* Left side: window controls (window mode) or app name (tray mode) */}
-        <div
-          className="flex items-center gap-1.5"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          {settings.windowMode ? (
-            <>
-              {/* macOS-style window control buttons */}
-              <button
-                className="w-3 h-3 rounded-full bg-red-500 hover:bg-red-400 transition-colors flex items-center justify-center group"
-                onClick={() => window.api.closeWindow()}
-                title="Back to tray"
-              >
-                <span className="hidden group-hover:block text-[7px] text-red-900 font-bold leading-none">×</span>
-              </button>
-              <button
-                className="w-3 h-3 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors flex items-center justify-center group"
-                onClick={() => window.api.minimizeWindow()}
-                title="Minimize"
-              >
-                <span className="hidden group-hover:block text-[7px] text-yellow-800 font-bold leading-none">–</span>
-              </button>
-              <button
-                className="w-3 h-3 rounded-full bg-green-500 hover:bg-green-400 transition-colors flex items-center justify-center group"
-                onClick={() => window.api.maximizeWindow()}
-                title="Maximize"
-              >
-                <span className="hidden group-hover:block text-[7px] text-green-900 font-bold leading-none">+</span>
-              </button>
-            </>
+    <div className="flex h-screen bg-bg-base text-text-primary overflow-hidden">
+      {/* Left sidebar */}
+      <ProjectSidebar />
+
+      {/* Main content area */}
+      <div className="flex flex-col flex-1 overflow-hidden">
+        {/* Top bar — drag region + actions */}
+        <MainTopBar />
+
+        {/* Content */}
+        <div className="flex-1 overflow-hidden relative">
+          {hasProjects ? (
+            <MainContent />
           ) : (
-            <span className="text-sm font-semibold text-text-primary select-none pl-1">
-              SessionManager
-            </span>
+            <EmptyState />
           )}
         </div>
-
-        {/* Center: app name in window mode */}
-        {settings.windowMode && (
-          <span className="text-sm font-semibold text-text-primary select-none absolute left-1/2 -translate-x-1/2">
-            SessionManager
-          </span>
-        )}
-
-        {/* Right side: toolbar buttons */}
-        <div
-          className="flex items-center gap-1"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          {/* Layout toggle */}
-          <LayoutToggle />
-
-          {/* Window mode toggle */}
-          <button
-            className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors"
-            onClick={() => {
-              const next = !settings.windowMode
-              setSettings({ windowMode: next })
-              window.api.setWindowMode(next)
-            }}
-            title={settings.windowMode ? 'Back to tray mode' : 'Open as window'}
-          >
-            {settings.windowMode ? '⊟' : '⧉'}
-          </button>
-
-          <button
-            className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors"
-            onClick={() => useAppStore.getState().setShowConfigPanel(true)}
-            title="Settings"
-          >
-            ⚙
-          </button>
-        </div>
-      </div>
-
-      {/* Project tabs */}
-      <ProjectTabs />
-
-      {/* Main content */}
-      <div className="flex-1 overflow-hidden relative">
-        {hasProjects ? (
-          <MainContent />
-        ) : (
-          <EmptyState />
-        )}
       </div>
 
       {/* Expanded terminal overlay */}
@@ -566,6 +490,82 @@ export default function App(): React.ReactElement {
       {showAddSessionModal && <AddSessionModal />}
       {showAddProjectModal && <AddProjectModal />}
       {showConfigPanel && <ConfigPanel />}
+    </div>
+  )
+}
+
+function MainTopBar(): React.ReactElement {
+  const { projects, activeProjectId, settings, setSettings, getActiveProject, getProjectViewMode, setProjectViewMode, setShowAddSessionModal, getSessionsForActiveProject, addSessionToProject, initSessionState } = useAppStore()
+
+  const project = getActiveProject()
+  const viewMode = activeProjectId ? getProjectViewMode(activeProjectId) : 'terminals'
+
+  const handleAddSession = (): void => {
+    if (!project) return
+    const sessions = getSessionsForActiveProject()
+    const lastCwd = sessions.at(-1)?.cwd
+    if (lastCwd) {
+      const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
+      window.api.addSessionToStore(project.id, { name, cwd: lastCwd }).then((stored) => {
+        addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd })
+        initSessionState(stored.id, project.id)
+        return window.api.createTerminal({ id: stored.id, name, cwd: lastCwd, projectId: project.id })
+      }).catch((err) => console.error('Failed to create session:', err))
+    } else {
+      setShowAddSessionModal(true)
+    }
+  }
+
+  return (
+    <div
+      className="flex items-center justify-between px-4 h-11 border-b border-border-subtle bg-bg-base flex-shrink-0"
+      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+    >
+      {/* Project name */}
+      <div
+        className="flex items-center gap-2"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        {project ? (
+          <span className="text-sm font-medium text-text-primary">{project.name}</span>
+        ) : (
+          <span className="text-sm text-text-muted">No project selected</span>
+        )}
+        {project && (
+          <div className="flex items-center bg-bg-overlay rounded-md overflow-hidden border border-border-subtle ml-2">
+            <button
+              className={`px-2.5 py-1 text-xs transition-colors ${viewMode === 'terminals' ? 'text-text-primary bg-bg-card' : 'text-text-muted hover:text-text-primary'}`}
+              onClick={() => activeProjectId && setProjectViewMode(activeProjectId, 'terminals')}
+            >
+              Terminals
+            </button>
+            <button
+              className={`px-2.5 py-1 text-xs transition-colors ${viewMode === 'planner' ? 'text-text-primary bg-bg-card' : 'text-text-muted hover:text-text-primary'}`}
+              onClick={() => activeProjectId && setProjectViewMode(activeProjectId, 'planner')}
+            >
+              Planner
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Right actions */}
+      <div
+        className="flex items-center gap-1"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        <LayoutToggle />
+        {project && (
+          <button
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded-md transition-colors"
+            onClick={handleAddSession}
+            title="New terminal (⌘T)"
+          >
+            <span className="text-base leading-none">+</span>
+            <span>Terminal</span>
+          </button>
+        )}
+      </div>
     </div>
   )
 }
