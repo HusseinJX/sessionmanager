@@ -30,6 +30,7 @@ export interface Project {
   name: string
   sessions: SessionConfig[]
   tasks: TaskItem[]
+  notes?: string
 }
 
 export interface SessionRuntimeState {
@@ -85,6 +86,7 @@ interface AppState {
   addProject: (project: Project) => void
   removeProject: (id: string) => void
   renameProject: (id: string, name: string) => void
+  updateProjectNotes: (id: string, notes: string) => void
   addSessionToProject: (projectId: string, session: SessionConfig) => void
   removeSessionFromProject: (projectId: string, sessionId: string) => void
   initSessionState: (sessionId: string, projectId: string) => void
@@ -202,6 +204,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   renameProject: (id, name) =>
     set((state) => ({
       projects: state.projects.map((p) => (p.id === id ? { ...p, name } : p))
+    })),
+
+  updateProjectNotes: (id, notes) =>
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, notes } : p))
     })),
 
   addSessionToProject: (projectId, session) =>

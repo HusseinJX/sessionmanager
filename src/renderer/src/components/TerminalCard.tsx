@@ -166,10 +166,9 @@ export default function TerminalCard({ session, projectId, isFocused }: Terminal
         </span>
       </div>
 
-      {/* Log preview — scroll works; click on it opens expanded view */}
+      {/* Log preview — grows to fill card; click opens expanded view */}
       <div
-        className="cursor-pointer"
-        style={{ height: 220 }}
+        className="cursor-pointer flex-1 min-h-0"
         onClick={() => setExpandedSession(session.id)}
       >
         <TextPreview sessionId={session.id} />

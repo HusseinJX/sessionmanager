@@ -15,7 +15,8 @@ import {
   removeTask,
   reorderTasks,
   getTasksForProject,
-  getNextTodoTask
+  getNextTodoTask,
+  updateProjectNotes
 } from './store'
 import type { AppSettings, TaskItem, TaskStatus } from './store'
 import { exportConfig, importConfig, applyImportedConfig, ExportConfig } from './config-io'
@@ -99,6 +100,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
         project.name = name
         setProjects(projects)
       }
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'project:update-notes',
+    async (_, { id, notes }: { id: string; notes: string }) => {
+      updateProjectNotes(id, notes)
       return { ok: true }
     }
   )

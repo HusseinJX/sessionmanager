@@ -1,6 +1,7 @@
 import React from 'react'
 import { useAppStore } from '../store'
 import TerminalCard from './TerminalCard'
+import ProjectNotes from './ProjectNotes'
 
 async function addQuickSession(projectId: string, cwd: string): Promise<void> {
   const { addSessionToProject, initSessionState } = useAppStore.getState()
@@ -67,44 +68,51 @@ export default function TerminalGrid(): React.ReactElement {
   const layoutMode = settings.layoutMode || 'auto'
 
   return (
-    <div className="h-full overflow-y-auto p-4 flex flex-col">
-      <div
-        className="grid gap-3 flex-1"
-        style={{
-          gridTemplateColumns: getGridTemplate(layoutMode)
-        }}
-      >
-        {sessions.map((session, idx) => (
-          <TerminalCard
-            key={session.id}
-            session={session}
-            projectId={project.id}
-            isFocused={focusedCardIndex === idx}
-          />
-        ))}
+    <div className="h-full overflow-y-auto">
+      {/* Notes sits at natural height — terminals start immediately below */}
+      <ProjectNotes projectId={project.id} />
 
-        {/* Add session card */}
-        <button
-          className="
-            flex flex-col items-center justify-center gap-2
-            bg-bg-card border border-dashed border-border-subtle rounded-lg
-            text-text-muted hover:text-text-primary hover:border-border-subtle
-            transition-colors min-h-[160px] cursor-pointer
-          "
-          onClick={handleAdd}
+      {/* Terminal grid scrolls with notes as one column */}
+      <div className="p-4 pt-3 flex flex-col gap-3">
+        <div
+          className="grid gap-3"
+          style={{
+            gridTemplateColumns: getGridTemplate(layoutMode),
+            gridAutoRows: 'minmax(300px, auto)',
+          }}
         >
-          <span className="text-2xl opacity-50">+</span>
-          <span className="text-xs">New Terminal</span>
-        </button>
-      </div>
+          {sessions.map((session, idx) => (
+            <TerminalCard
+              key={session.id}
+              session={session}
+              projectId={project.id}
+              isFocused={focusedCardIndex === idx}
+            />
+          ))}
 
-      {/* Keyboard shortcut hints */}
-      <div className="flex items-center gap-4 pt-3 pb-1 text-[10px] text-text-muted/40 select-none flex-shrink-0">
-        <span><kbd className="font-mono">{'\u2190\u2192'}</kbd> navigate</span>
-        <span><kbd className="font-mono">{'\u21A9'}</kbd> expand</span>
-        <span><kbd className="font-mono">{'\u2318\u2190\u2192'}</kbd> projects</span>
-        <span><kbd className="font-mono">{'\u2318'}T</kbd> new terminal</span>
-        <span><kbd className="font-mono">{'\u2318'},</kbd> settings</span>
+          {/* Add session card */}
+          <button
+            className="
+              flex flex-col items-center justify-center gap-2
+              bg-bg-card border border-dashed border-border-subtle rounded-lg
+              text-text-muted hover:text-text-primary hover:border-border-subtle
+              transition-colors min-h-[160px] cursor-pointer
+            "
+            onClick={handleAdd}
+          >
+            <span className="text-2xl opacity-50">+</span>
+            <span className="text-xs">New Terminal</span>
+          </button>
+        </div>
+
+        {/* Keyboard shortcut hints */}
+        <div className="flex items-center gap-4 pt-0 pb-1 text-[10px] text-text-muted/40 select-none">
+          <span><kbd className="font-mono">{'\u2190\u2192'}</kbd> navigate</span>
+          <span><kbd className="font-mono">{'\u21A9'}</kbd> expand</span>
+          <span><kbd className="font-mono">{'\u2318\u2190\u2192'}</kbd> projects</span>
+          <span><kbd className="font-mono">{'\u2318'}T</kbd> new terminal</span>
+          <span><kbd className="font-mono">{'\u2318'},</kbd> settings</span>
+        </div>
       </div>
     </div>
   )

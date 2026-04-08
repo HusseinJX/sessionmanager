@@ -56,6 +56,7 @@ declare global {
       addProject: (name: string) => Promise<Project>
       removeProject: (id: string) => Promise<{ ok: boolean }>
       renameProject: (id: string, name: string) => Promise<{ ok: boolean }>
+      updateProjectNotes: (id: string, notes: string) => Promise<{ ok: boolean }>
       addSessionToStore: (
         projectId: string,
         session: { name: string; cwd: string; command?: string; parentSessionId?: string }

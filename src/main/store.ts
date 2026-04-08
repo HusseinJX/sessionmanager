@@ -33,6 +33,7 @@ export interface ProjectConfig {
   name: string
   sessions: SessionConfig[]
   tasks: TaskItem[]
+  notes?: string
 }
 
 export interface AppSettings {
@@ -180,6 +181,15 @@ export function addProject(name: string): ProjectConfig {
 export function removeProject(projectId: string): void {
   const projects = getProjects().filter((p) => p.id !== projectId)
   setProjects(projects)
+}
+
+export function updateProjectNotes(projectId: string, notes: string): void {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  if (project) {
+    project.notes = notes
+    setProjects(projects)
+  }
 }
 
 export function addSession(projectId: string, session: Omit<SessionConfig, 'id'>): SessionConfig {

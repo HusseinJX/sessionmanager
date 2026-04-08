@@ -111,6 +111,9 @@ contextBridge.exposeInMainWorld('api', {
   renameProject: (id: string, name: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('project:rename', { id, name }),
 
+  updateProjectNotes: (id: string, notes: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('project:update-notes', { id, notes }),
+
   // ─── Session store management ────────────────────────────────────────────
 
   addSessionToStore: (
