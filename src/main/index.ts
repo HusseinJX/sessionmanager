@@ -233,13 +233,61 @@ function createWindow(): BrowserWindow {
 
 // ── App init ───────────────────────────────────────────────────────────────────
 
+function buildAppMenu(): void {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    // macOS requires the first menu to be the app name menu
+    ...(process.platform === 'darwin' ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' as const },
+        { type: 'separator' as const },
+        { role: 'services' as const },
+        { type: 'separator' as const },
+        { role: 'hide' as const },
+        { role: 'hideOthers' as const },
+        { role: 'unhide' as const },
+        { type: 'separator' as const },
+        { role: 'quit' as const },
+      ]
+    }] : []),
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => {
+            const newWin = createWindow()
+            newWin.show()
+            newWin.focus()
+          }
+        },
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' as const },
+        { role: 'redo' as const },
+        { type: 'separator' as const },
+        { role: 'cut' as const },
+        { role: 'copy' as const },
+        { role: 'paste' as const },
+        { role: 'selectAll' as const },
+      ]
+    },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 async function init(): Promise<void> {
   if (process.platform === 'darwin') {
     app.setActivationPolicy(windowMode ? 'regular' : 'accessory')
   }
 
+  buildAppMenu()
+
   win = createWindow()
-  if (isDev) win.webContents.openDevTools({ mode: 'detach' })
   tray = createTrayIcon()
 
   sessionManager.setWindow(win)
@@ -309,9 +357,6 @@ async function init(): Promise<void> {
 
   ipcMain.handle('window:new', async () => {
     const newWin = createWindow()
-    if (process.platform === 'darwin') {
-      newWin.setWindowButtonVisibility(windowMode)
-    }
     newWin.show()
     newWin.focus()
     return { ok: true }
