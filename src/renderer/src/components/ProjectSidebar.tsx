@@ -25,11 +25,14 @@ function GearIcon({ className }: { className?: string }): React.ReactElement {
   )
 }
 
+const isMac = navigator.platform.startsWith('Mac')
+
 export default function ProjectSidebar(): React.ReactElement {
   const {
     projects,
     activeProjectId,
     sessionStates,
+    settings,
     setActiveProject,
     setShowAddProjectModal,
     removeProject,
@@ -84,23 +87,16 @@ export default function ProjectSidebar(): React.ReactElement {
 
   return (
     <div className="flex flex-col h-full bg-sidebar border-r border-border-subtle select-none" style={{ width: 220, minWidth: 220 }}>
-      {/* App header / drag region */}
+      {/* App header / drag region — in window mode on macOS, native traffic lights occupy ~80px from the left */}
       <div
-        className="flex items-center gap-2 px-4 py-3 border-b border-border-subtle"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      >
-        <div
-          className="flex items-center gap-2 flex-1 min-w-0"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          {/* Traffic lights placeholder on mac — push app name right */}
-          <div className="flex items-center gap-1 mr-1">
-            <div className="w-3 h-3 rounded-full bg-[#ff5f57] hover:brightness-110 transition-all cursor-pointer" onClick={() => window.api.closeWindow()} />
-            <div className="w-3 h-3 rounded-full bg-[#ffbd2e] hover:brightness-110 transition-all cursor-pointer" onClick={() => window.api.minimizeWindow()} />
-            <div className="w-3 h-3 rounded-full bg-[#28c840] hover:brightness-110 transition-all cursor-pointer" onClick={() => window.api.maximizeWindow()} />
-          </div>
-        </div>
-      </div>
+        className="py-3 border-b border-border-subtle"
+        style={{
+          WebkitAppRegion: 'drag',
+          paddingLeft: isMac && settings.windowMode ? 80 : 16,
+          paddingRight: 16,
+          minHeight: 44,
+        } as React.CSSProperties}
+      />
 
       {/* App name */}
       <div className="px-4 pt-4 pb-2">

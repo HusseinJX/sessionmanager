@@ -183,6 +183,12 @@ export class SessionManager extends EventEmitter {
     this.win = win
   }
 
+  private broadcast(channel: string, data: unknown): void {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send(channel, data)
+    })
+  }
+
   setShowWindow(fn: () => void): void {
     this.showWindowFn = fn
   }
@@ -202,9 +208,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private emitInputWaiting(id: string, session: PtySession): void {
-    if (this.win && !this.win.isDestroyed()) {
-      this.win.webContents.send('terminal:input-waiting', { id })
-    }
+    this.broadcast('terminal:input-waiting', { id })
     if (!this.win?.isVisible() && Notification.isSupported()) {
       const notification = new Notification({
         title: `${session.meta.name} is waiting`,
@@ -213,9 +217,7 @@ export class SessionManager extends EventEmitter {
       })
       notification.on('click', () => {
         this.showWindowFn?.()
-        if (this.win && !this.win.isDestroyed()) {
-          this.win.webContents.send('terminal:focus-session', { id })
-        }
+        this.broadcast('terminal:focus-session', { id })
       })
       notification.show()
     }
@@ -223,13 +225,12 @@ export class SessionManager extends EventEmitter {
   }
 
   private flushBatches(): void {
-    if (!this.win || this.win.isDestroyed()) return
     const now = Date.now()
     for (const [id, session] of this.sessions) {
       if (session.batchBuffer.length > 0) {
         const data = session.batchBuffer
         session.batchBuffer = ''
-        this.win.webContents.send('terminal:output', { id, data })
+        this.broadcast('terminal:output', { id, data })
       }
       // Idle-based input-waiting detection — when idle conditions are met,
       // verify via OS process state that the foreground program is genuinely
@@ -257,6 +258,7 @@ export class SessionManager extends EventEmitter {
   }
 
   createSession(meta: SessionMeta): void {
+    if (this.sessions.has(meta.id)) return  // already running — skip duplicate creation
     const resolvedCwd = resolveHome(meta.cwd)
     let cwd = resolvedCwd
 
@@ -328,9 +330,7 @@ export class SessionManager extends EventEmitter {
           if (newCwd && newCwd !== session.currentCwd) {
             session.currentCwd = newCwd
             updateSessionCwd(meta.id, newCwd)  // persist so refresh restores last cwd
-            if (this.win && !this.win.isDestroyed()) {
-              this.win.webContents.send('terminal:cwd', { id: meta.id, cwd: newCwd })
-            }
+            this.broadcast('terminal:cwd', { id: meta.id, cwd: newCwd })
             this.emit('cwd', meta.id, newCwd)
           }
         } catch { /* malformed URL — ignore */ }
@@ -344,9 +344,7 @@ export class SessionManager extends EventEmitter {
 
       if (!nowWaiting && wasWaiting) {
         session.inputWaiting = false
-        if (this.win && !this.win.isDestroyed()) {
-          this.win.webContents.send('terminal:input-resolved', { id: meta.id })
-        }
+        this.broadcast('terminal:input-resolved', { id: meta.id })
       }
 
       if (nowWaiting && !wasWaiting) {
@@ -359,9 +357,7 @@ export class SessionManager extends EventEmitter {
     pty.onExit(({ exitCode }) => {
       session.meta.status = 'exited'
       session.meta.exitCode = exitCode
-      if (this.win && !this.win.isDestroyed()) {
-        this.win.webContents.send('terminal:exit', { id: meta.id, code: exitCode })
-      }
+      this.broadcast('terminal:exit', { id: meta.id, code: exitCode })
       this.emit('exit', meta.id, exitCode)
     })
 
@@ -394,9 +390,7 @@ export class SessionManager extends EventEmitter {
     session.activityBytes = 0
     if (session.inputWaiting) {
       session.inputWaiting = false
-      if (this.win && !this.win.isDestroyed()) {
-        this.win.webContents.send('terminal:input-resolved', { id })
-      }
+      this.broadcast('terminal:input-resolved', { id })
     }
     return true
   }

@@ -1,13 +1,11 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, shell, screen } from 'electron'
 import * as path from 'path'
-import * as os from 'os'
 import * as crypto from 'crypto'
 import { sessionManager } from './session-manager'
 import { HttpApiServer } from './http-server'
 import { registerIpcHandlers } from './ipc-handlers'
 import { getSettings, setSettings, getProjects } from './store'
 
-// Prevent window from being garbage collected
 let tray: Tray | null = null
 let win: BrowserWindow | null = null
 let httpServer: HttpApiServer | null = null
@@ -24,11 +22,81 @@ if (process.platform === 'darwin') {
   }
 }
 
-function createTrayIcon(): Tray {
-  // Create a simple 16x16 PNG tray icon programmatically
-  // In production you'd use a real .png file from resources/
-  let iconPath: string
+// ── Hotkey helpers ─────────────────────────────────────────────────────────────
 
+function makeHotkeyHandler(): () => void {
+  return () => {
+    if (win?.isVisible()) {
+      win.hide()
+    } else {
+      showWindow()
+    }
+  }
+}
+
+// Register the persisted hotkey. No-op if already in window mode (hotkey is tray-only).
+function registerHotkey(): void {
+  const hotkey = getSettings().hotkey || 'CommandOrControl+Shift+T'
+  globalShortcut.unregisterAll()
+  globalShortcut.register(hotkey, makeHotkeyHandler())
+}
+
+function unregisterHotkey(): void {
+  globalShortcut.unregisterAll()
+}
+
+// ── Window mode core logic ─────────────────────────────────────────────────────
+//
+// Two modes:
+//   Window mode  — behaves like a regular macOS app:
+//                  stays in one Space, Dock icon, Cmd+Tab, traffic lights visible,
+//                  global hotkey disabled.
+//   Tray mode    — menubar accessory:
+//                  follows all Spaces, no Dock icon, hides on blur,
+//                  global hotkey active, no traffic lights.
+
+function applyWindowModeCore(enabled: boolean): void {
+  if (!win) return
+  windowMode = enabled
+
+  if (enabled) {
+    // ── Window mode ──────────────────────────────────────────────────────────
+    unregisterHotkey()
+    win.setSkipTaskbar(false)
+    if (process.platform === 'darwin') {
+      app.setActivationPolicy('regular')
+      app.dock.show()
+      win.setVisibleOnAllWorkspaces(false)
+      win.setWindowButtonVisibility(true)
+    }
+  } else {
+    // ── Tray mode ────────────────────────────────────────────────────────────
+    registerHotkey()
+    win.setSkipTaskbar(true)
+    if (process.platform === 'darwin') {
+      app.setActivationPolicy('accessory')
+      app.dock.hide()
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+      win.setWindowButtonVisibility(false)
+    }
+  }
+}
+
+// Persistent switch — saves to settings and centers/shows window when entering window mode.
+function applyWindowMode(enabled: boolean): void {
+  setSettings({ windowMode: enabled })
+  applyWindowModeCore(enabled)
+  if (enabled) {
+    win?.center()
+    win?.show()
+    win?.focus()
+  }
+}
+
+// ── Tray icon ──────────────────────────────────────────────────────────────────
+
+function createTrayIcon(): Tray {
+  let iconPath: string
   if (isDev) {
     iconPath = path.join(process.cwd(), 'resources', 'tray-icon.png')
   } else {
@@ -38,118 +106,68 @@ function createTrayIcon(): Tray {
   let icon: Electron.NativeImage
   try {
     icon = nativeImage.createFromPath(iconPath)
-    if (icon.isEmpty()) {
-      // Fallback: create a minimal icon from a 16x16 gray square
-      icon = nativeImage.createEmpty()
-    }
+    if (icon.isEmpty()) icon = nativeImage.createEmpty()
   } catch {
     icon = nativeImage.createEmpty()
   }
 
-  // On macOS, make it a template image (white/black adapts to menubar)
-  if (process.platform === 'darwin') {
-    icon.setTemplateImage(true)
-  }
+  if (process.platform === 'darwin') icon.setTemplateImage(true)
 
   const t = new Tray(icon)
   t.setToolTip('SessionManager')
 
   const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Open SessionManager',
-      click: () => showWindow()
-    },
+    { label: 'Open SessionManager', click: () => showWindow() },
     { type: 'separator' },
-    {
-      label: 'Quit',
-      accelerator: 'CmdOrCtrl+Q',
-      click: () => {
-        app.quit()
-      }
-    }
+    { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() }
   ])
 
   t.on('click', () => {
-    if (win?.isVisible()) {
-      win.hide()
-    } else {
-      showWindow()
-    }
+    if (win?.isVisible()) win.hide()
+    else showWindow()
   })
-
-  t.on('right-click', () => {
-    t.popUpContextMenu(contextMenu)
-  })
+  t.on('right-click', () => t.popUpContextMenu(contextMenu))
 
   return t
 }
+
+// ── Window positioning ─────────────────────────────────────────────────────────
 
 function positionWindowAtTray(): void {
   if (!win || !tray) return
 
   const trayBounds = tray.getBounds()
   const winBounds = win.getBounds()
-
   let x: number
   let y: number
 
   if (process.platform === 'darwin') {
-    // macOS menubar at top
     x = Math.round(trayBounds.x - winBounds.width / 2 + trayBounds.width / 2)
     y = Math.round(trayBounds.y + trayBounds.height + 4)
   } else if (process.platform === 'win32') {
-    // Windows taskbar — could be at bottom, top, left, or right
     const { height: screenH } = screen.getPrimaryDisplay().workAreaSize
     x = Math.round(trayBounds.x - winBounds.width / 2 + trayBounds.width / 2)
     y = screenH - winBounds.height - 8
   } else {
-    // Linux
     x = Math.round(trayBounds.x - winBounds.width / 2 + trayBounds.width / 2)
     y = Math.round(trayBounds.y + trayBounds.height + 4)
   }
 
-  // Keep inside screen bounds
   const display = screen.getDisplayNearestPoint({ x, y })
   const { bounds } = display
-
   x = Math.max(bounds.x, Math.min(x, bounds.x + bounds.width - winBounds.width))
   y = Math.max(bounds.y, Math.min(y, bounds.y + bounds.height - winBounds.height))
-
   win.setPosition(x, y)
 }
 
 function showWindow(): void {
   if (!win) return
-  if (!windowMode) {
-    positionWindowAtTray()
-  }
+  if (!windowMode) positionWindowAtTray()
   win.show()
   win.focus()
 }
 
-function applyWindowMode(enabled: boolean): void {
-  if (!win) return
-  windowMode = enabled
-  setSettings({ windowMode: enabled })
-
-  if (enabled) {
-    win.setSkipTaskbar(false)
-    if (process.platform === 'darwin') {
-      app.setActivationPolicy('regular')
-      app.dock.show()
-    }
-    // Move window to center of screen when entering window mode
-    win.center()
-    win.show()
-    win.focus()
-  } else {
-    win.setSkipTaskbar(true)
-    if (process.platform === 'darwin') {
-      app.setActivationPolicy('accessory')
-      app.dock.hide()
-    }
-  }
-}
+// ── BrowserWindow creation ─────────────────────────────────────────────────────
 
 function createWindow(): BrowserWindow {
   const settings = getSettings()
@@ -158,7 +176,11 @@ function createWindow(): BrowserWindow {
     width: settings.windowWidth || 1200,
     height: settings.windowHeight || 800,
     show: false,
-    frame: false,
+    // macOS: use hiddenInset so traffic lights can be toggled dynamically.
+    // Other platforms: plain frameless window.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset' as const }
+      : { frame: false }),
     resizable: true,
     skipTaskbar: !windowMode,
     alwaysOnTop: false,
@@ -167,19 +189,24 @@ function createWindow(): BrowserWindow {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false // needed for preload to use require
+      sandbox: false
     }
   })
 
+  // Set initial workspace / traffic-light state
   if (process.platform === 'darwin') {
-    w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    if (windowMode) {
+      w.setVisibleOnAllWorkspaces(false)
+      w.setWindowButtonVisibility(true)
+    } else {
+      w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+      w.setWindowButtonVisibility(false)
+    }
   }
 
-  // Hide on blur (standard menubar behavior) — only in tray mode
+  // Tray mode: hide on blur
   w.on('blur', () => {
-    if (!isDev && !windowMode) {
-      w.hide()
-    }
+    if (!isDev && !windowMode) w.hide()
   })
 
   // Persist window size
@@ -197,7 +224,6 @@ function createWindow(): BrowserWindow {
 
   if (isDev) {
     w.loadURL(process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173')
-    w.webContents.openDevTools({ mode: 'detach' })
   } else {
     w.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
@@ -205,13 +231,15 @@ function createWindow(): BrowserWindow {
   return w
 }
 
+// ── App init ───────────────────────────────────────────────────────────────────
+
 async function init(): Promise<void> {
-  // macOS: accessory = menubar only; regular = Dock + Cmd+Tab
   if (process.platform === 'darwin') {
     app.setActivationPolicy(windowMode ? 'regular' : 'accessory')
   }
 
   win = createWindow()
+  if (isDev) win.webContents.openDevTools({ mode: 'detach' })
   tray = createTrayIcon()
 
   sessionManager.setWindow(win)
@@ -220,39 +248,23 @@ async function init(): Promise<void> {
 
   registerIpcHandlers(win)
 
-  // Global shortcut to open/focus the app
-  const settings = getSettings()
-  const initialHotkey = settings.hotkey || 'CommandOrControl+Shift+T'
-  globalShortcut.register(initialHotkey, () => {
-    if (win?.isVisible()) {
-      win.hide()
-    } else {
-      showWindow()
-    }
-  })
+  // Hotkey only active in tray mode
+  if (!windowMode) {
+    registerHotkey()
+  }
 
-  // IPC: re-register global shortcut with a new accelerator
+  // IPC: set hotkey (re-registers only when in tray mode)
   ipcMain.handle('settings:set-hotkey', async (_, { accelerator }: { accelerator: string }) => {
     try {
       globalShortcut.unregisterAll()
-      const ok = globalShortcut.register(accelerator, () => {
-        if (win?.isVisible()) {
-          win.hide()
-        } else {
-          showWindow()
+      if (!windowMode) {
+        const ok = globalShortcut.register(accelerator, makeHotkeyHandler())
+        if (!ok) {
+          // Restore previous hotkey
+          const prev = getSettings().hotkey || 'CommandOrControl+Shift+T'
+          globalShortcut.register(prev, makeHotkeyHandler())
+          return { ok: false, error: 'Hotkey registration failed — it may be in use by another app.' }
         }
-      })
-      if (!ok) {
-        // Registration failed (key in use or invalid) — restore old one
-        const prev = getSettings().hotkey || 'CommandOrControl+Shift+T'
-        globalShortcut.register(prev, () => {
-          if (win?.isVisible()) {
-            win.hide()
-          } else {
-            showWindow()
-          }
-        })
-        return { ok: false, error: 'Hotkey registration failed — it may be in use by another app.' }
       }
       setSettings({ hotkey: accelerator })
       return { ok: true }
@@ -261,9 +273,19 @@ async function init(): Promise<void> {
     }
   })
 
-  // Window mode + controls
+  // IPC: persistent window mode switch (saves setting)
   ipcMain.handle('window:set-mode', async (_, { enabled }: { enabled: boolean }) => {
     applyWindowMode(enabled)
+    return { ok: true }
+  })
+
+  // IPC: temporary window mode switch (does NOT save setting — used by terminal mode)
+  ipcMain.handle('window:set-mode-temp', async (_, { enabled }: { enabled: boolean }) => {
+    applyWindowModeCore(enabled)
+    if (enabled) {
+      win?.show()
+      win?.focus()
+    }
     return { ok: true }
   })
 
@@ -273,18 +295,25 @@ async function init(): Promise<void> {
   })
 
   ipcMain.handle('window:maximize', async () => {
-    if (win?.isMaximized()) {
-      win.unmaximize()
-    } else {
-      win?.maximize()
-    }
+    if (win?.isMaximized()) win.unmaximize()
+    else win?.maximize()
     return { ok: true }
   })
 
   ipcMain.handle('window:close', async () => {
-    // In window mode "close" returns to tray mode
+    // "Close" in window mode returns to tray mode
     applyWindowMode(false)
     win?.hide()
+    return { ok: true }
+  })
+
+  ipcMain.handle('window:new', async () => {
+    const newWin = createWindow()
+    if (process.platform === 'darwin') {
+      newWin.setWindowButtonVisibility(windowMode)
+    }
+    newWin.show()
+    newWin.focus()
     return { ok: true }
   })
 
@@ -304,7 +333,6 @@ async function init(): Promise<void> {
     })
   }
 
-  // IPC: get server info (port, token, running status)
   ipcMain.handle('server:info', async () => {
     const s = getSettings()
     return {
@@ -316,7 +344,6 @@ async function init(): Promise<void> {
     }
   })
 
-  // Restore sessions from store on launch
   restoreSessionsFromStore()
 }
 
@@ -337,7 +364,8 @@ function restoreSessionsFromStore(): void {
   }
 }
 
-// App lifecycle
+// ── App lifecycle ──────────────────────────────────────────────────────────────
+
 app.whenReady().then(init)
 
 app.on('before-quit', () => {
@@ -347,10 +375,7 @@ app.on('before-quit', () => {
 })
 
 app.on('window-all-closed', () => {
-  // Don't quit — keep running in tray
-  if (process.platform !== 'darwin') {
-    // On non-mac, also keep running
-  }
+  // Keep running in tray — don't quit
 })
 
 app.on('activate', () => {

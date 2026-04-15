@@ -8,6 +8,8 @@ import AddSessionModal from './components/AddSessionModal'
 import AddProjectModal from './components/AddProjectModal'
 import ConfigPanel from './components/ConfigPanel'
 import PlannerBoard from './components/PlannerBoard'
+import SessionNotesModal from './components/SessionNotesModal'
+import TerminalModeView from './components/TerminalModeView'
 import type { Project } from './store'
 
 declare global {
@@ -59,12 +61,23 @@ declare global {
       updateProjectNotes: (id: string, notes: string) => Promise<{ ok: boolean }>
       addSessionToStore: (
         projectId: string,
-        session: { name: string; cwd: string; command?: string; parentSessionId?: string }
+        session: {
+          name: string
+          cwd: string
+          command?: string
+          parentSessionId?: string
+          notes?: string
+        }
       ) => Promise<{ id: string }>
       removeSessionFromStore: (
         projectId: string,
         sessionId: string
       ) => Promise<{ ok: boolean }>
+      updateSessionNotes: (
+        projectId: string,
+        sessionId: string,
+        notes: string
+      ) => Promise<{ ok: boolean; session?: unknown }>
       // Task / Planner
       getTasks: (projectId: string) => Promise<unknown[]>
       addTask: (
@@ -95,9 +108,11 @@ declare global {
         url: string
       }>
       setWindowMode: (enabled: boolean) => Promise<{ ok: boolean }>
+      setWindowModeTemp: (enabled: boolean) => Promise<{ ok: boolean }>
       minimizeWindow: () => Promise<{ ok: boolean }>
       maximizeWindow: () => Promise<{ ok: boolean }>
       closeWindow: () => Promise<{ ok: boolean }>
+      newWindow: () => Promise<{ ok: boolean }>
     }
   }
 }
@@ -200,6 +215,8 @@ export default function App(): React.ReactElement {
     showAddSessionModal,
     showAddProjectModal,
     showConfigPanel,
+    sessionNotesEditor,
+    isTerminalMode,
     setProjects,
     setActiveProject,
     activeProjectId,
@@ -388,6 +405,14 @@ export default function App(): React.ReactElement {
       if (inInput && !e.metaKey && !e.ctrlKey) return
 
       // ── App shortcuts ───────────────────────────────────────────────
+      // Cmd+N: open a new window when in window mode or terminal mode
+      if (e.metaKey && e.key === 'n' && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+        if (state.settings.windowMode || state.isTerminalMode) {
+          e.preventDefault()
+          window.api.newWindow()
+          return
+        }
+      }
       if (matchesBinding(e, 'app.newTerminal', kb)) {
         e.preventDefault()
         handleQuickTerminal()
@@ -482,9 +507,19 @@ export default function App(): React.ReactElement {
         </div>
       </div>
 
+      {/* Terminal mode overlay */}
+      {isTerminalMode && <TerminalModeView />}
+
       {/* Expanded terminal overlay */}
-      {expandedSessionId && (
+      {!isTerminalMode && expandedSessionId && (
         <FullTerminal sessionId={expandedSessionId} />
+      )}
+
+      {sessionNotesEditor && (
+        <SessionNotesModal
+          projectId={sessionNotesEditor.projectId}
+          sessionId={sessionNotesEditor.sessionId}
+        />
       )}
 
       {/* Modals */}
@@ -496,7 +531,7 @@ export default function App(): React.ReactElement {
 }
 
 function MainTopBar(): React.ReactElement {
-  const { projects, activeProjectId, settings, setSettings, getActiveProject, getProjectViewMode, setProjectViewMode, setShowAddSessionModal, getSessionsForActiveProject, addSessionToProject, initSessionState } = useAppStore()
+  const { projects, activeProjectId, settings, setSettings, getActiveProject, getProjectViewMode, setProjectViewMode, setShowAddSessionModal, getSessionsForActiveProject, addSessionToProject, initSessionState, setTerminalMode, setTerminalModeSession } = useAppStore()
 
   const project = getActiveProject()
   const viewMode = activeProjectId ? getProjectViewMode(activeProjectId) : 'terminals'
@@ -519,8 +554,8 @@ function MainTopBar(): React.ReactElement {
 
   return (
     <div
-      className="flex items-center justify-between px-4 h-11 border-b border-border-subtle bg-bg-base flex-shrink-0"
-      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      className="flex items-center justify-between h-11 border-b border-border-subtle bg-bg-base flex-shrink-0"
+      style={{ WebkitAppRegion: 'drag', paddingLeft: 16, paddingRight: 16 } as React.CSSProperties}
     >
       {/* Project name */}
       <div
@@ -566,6 +601,39 @@ function MainTopBar(): React.ReactElement {
             <span>Terminal</span>
           </button>
         )}
+        <div className="w-px h-4 bg-border-subtle mx-0.5" />
+        {/* Window mode toggle */}
+        <button
+          className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors border ${
+            settings.windowMode
+              ? 'text-accent-green border-accent-green/40 hover:border-accent-green/70 bg-accent-green/5'
+              : 'text-text-muted border-border-subtle/60 hover:text-text-primary hover:bg-bg-overlay'
+          }`}
+          onClick={() => {
+            const next = !settings.windowMode
+            setSettings({ windowMode: next })
+            window.api.setWindowMode(next)
+          }}
+          title={settings.windowMode ? 'Window mode — click to switch to tray mode' : 'Tray mode — click to switch to window mode'}
+        >
+          <span className="text-[12px] leading-none">{settings.windowMode ? '🖥' : '◼'}</span>
+          <span>{settings.windowMode ? 'Window' : 'Tray'}</span>
+        </button>
+        <div className="w-px h-4 bg-border-subtle mx-0.5" />
+        <button
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded-md transition-colors border border-border-subtle/60"
+          onClick={() => {
+            const sessions = projects.flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
+            setTerminalModeSession(sessions[0]?.id ?? null)
+            setTerminalMode(true)
+            // Terminal mode always runs as a proper window
+            window.api.setWindowModeTemp(true)
+          }}
+          title="Enter terminal mode"
+        >
+          <span className="font-mono text-[11px]">▣</span>
+          <span>Terminal Mode</span>
+        </button>
       </div>
     </div>
   )

@@ -118,12 +118,19 @@ contextBridge.exposeInMainWorld('api', {
 
   addSessionToStore: (
     projectId: string,
-    session: { name: string; cwd: string; command?: string }
+    session: { name: string; cwd: string; command?: string; parentSessionId?: string; notes?: string }
   ): Promise<{ id: string }> =>
     ipcRenderer.invoke('session:store-add', { projectId, session }),
 
   removeSessionFromStore: (projectId: string, sessionId: string): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('session:store-remove', { projectId, sessionId }),
+
+  updateSessionNotes: (
+    projectId: string,
+    sessionId: string,
+    notes: string
+  ): Promise<{ ok: boolean; session?: unknown }> =>
+    ipcRenderer.invoke('session:update-notes', { projectId, sessionId, notes }),
 
   // ─── Task / Planner management ──────────────────────────────────────────
 
@@ -189,6 +196,9 @@ contextBridge.exposeInMainWorld('api', {
   setWindowMode: (enabled: boolean): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:set-mode', { enabled }),
 
+  setWindowModeTemp: (enabled: boolean): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:set-mode-temp', { enabled }),
+
   minimizeWindow: (): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:minimize'),
 
@@ -196,5 +206,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('window:maximize'),
 
   closeWindow: (): Promise<{ ok: boolean }> =>
-    ipcRenderer.invoke('window:close')
+    ipcRenderer.invoke('window:close'),
+
+  newWindow: (): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:new')
 })
