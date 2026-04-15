@@ -262,6 +262,8 @@ function buildAppMenu(): void {
             newWin.focus()
           }
         },
+        { type: 'separator' as const },
+        { role: 'close' as const },
       ]
     },
     {
