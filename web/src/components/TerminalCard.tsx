@@ -1,7 +1,7 @@
 import { useState, useRef, KeyboardEvent } from 'react'
 import { useAppStore } from '../store'
 import type { SessionStatus } from '../types'
-import { sendCommand, deleteSession, updateTaskApi, uploadImage } from '../api'
+import { sendCommand, deleteSession, uploadImage, setQueueRunningApi } from '../api'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -53,7 +53,6 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
     openSessionNotesEditor,
     removeSessionFromProject,
     projectTasks,
-    updateTaskInProject,
     sessionQueueRunning,
     setSessionQueueRunning,
   } = useAppStore()
@@ -156,29 +155,9 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
   const handlePlayNext = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!config || !activeProjectId) return
-
-    // Toggle: running → stop
-    if (queueRunning) {
-      setSessionQueueRunning(session.id, false)
-      return
-    }
-
-    // Start auto-advance. If nothing is already in-progress on this session,
-    // kick it off by sending the first backlog task now; otherwise let the
-    // next input-waiting transition pick it up.
-    setSessionQueueRunning(session.id, true)
-    const inProgress = sessionProjectTasks.find(
-      (t) => t.assignedSessionId === session.id && t.status === 'in-progress'
-    )
-    if (inProgress) return
-    if (!nextTask) {
-      setSessionQueueRunning(session.id, false)
-      return
-    }
-    sendCommand(config, session.id, nextTask.title).catch(console.error)
-    const updates = { status: 'in-progress' as const, assignedSessionId: session.id }
-    updateTaskInProject(activeProjectId, nextTask.id, updates)
-    updateTaskApi(config, activeProjectId, nextTask.id, updates).catch(() => {})
+    const next = !queueRunning
+    setSessionQueueRunning(session.id, next)
+    setQueueRunningApi(config, activeProjectId, session.id, next).catch(() => {})
   }
 
   return (

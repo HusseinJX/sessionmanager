@@ -947,6 +947,34 @@ Mirrored the renderer's single-terminal planner model into the web client and re
 
 ---
 
+## Checkpoint — Terminal mode defaults, no flash, no tray icon in windowed mode
+
+**Problems fixed:**
+1. Flash to session manager view before terminal mode loaded in new windows
+2. App didn't default to terminal mode on launch
+3. Tray/menu bar icon still visible in windowed/terminal mode
+4. `prevWindowMode` bug: TerminalModeView captured `settings.windowMode = false` (store default) at mount, causing exit to switch to tray mode
+
+**Changes:**
+- `src/renderer/src/store/index.ts`: Initialize `isTerminalMode` synchronously from `window.location.search` at store creation — first render is already in terminal mode for `?terminalMode=1` windows. Changed `windowMode` default to `true`.
+- `src/main/index.ts`: Main window created with `{ terminalMode: true }` so it always opens in terminal mode. Tray icon only created when `windowMode = false`; destroyed when switching to windowed mode, recreated when switching to tray mode (in `applyWindowModeCore`).
+- `src/renderer/src/components/TerminalModeView.tsx`: Removed `prevWindowMode` and `setWindowModeTemp` from exit button — terminal mode always runs windowed, nothing to restore. Removed unused `useMemo` import.
+
+---
+
+## Checkpoint — Terminal mode windowed-only + new window fix
+
+**Root causes fixed:**
+1. `windowMode` defaulted to `false` (tray) — new terminal-mode windows got tray settings
+2. `window:set-mode-temp` IPC targeted `win` (main window), not sender — calling from new window focused main window instead
+3. UI showed both mode toggles in all contexts
+
+**Changes:**
+- `src/main/index.ts`: Default `windowMode ?? true`. `createWindow` uses `effectiveWindowMode = windowMode || !!opts?.terminalMode` so terminal-mode windows always get traffic lights, proper workspace visibility, and non-skip-taskbar. Blur hide skipped for terminal-mode windows. `window:set-mode-temp` now uses `BrowserWindow.fromWebContents(event.sender)` to target secondary windows independently.
+- `src/renderer/src/App.tsx`: Window/Tray toggle hidden in terminal mode. Terminal Mode button only shown when `settings.windowMode` is true. Removed `setWindowModeTemp(true)` calls from entry points (not needed since terminal mode requires window mode). Moved `startInTerminalMode` check outside the `projects.length > 0` block.
+
+---
+
 ## Checkpoint — Planner queue toggle button, per-task play removed
 
 Replaced the per-task ▶ button on planner cards with a single queue toggle in the filter bar, matching the terminal-header play button behavior.
@@ -963,3 +991,30 @@ Replaced the per-task ▶ button on planner cards with a single queue toggle in 
 - `cd web && npm run build` → `dist/assets/index-CPJjW-a5.js`
 - Rsynced `web/dist/` to `64.23.191.7`; `systemctl restart sessionmanager`.
 - Verified: `https://64.23.191.7/` serves `index-CPJjW-a5.js`.
+
+---
+
+## Checkpoint — Server-side queue advancement
+
+**Problem:** Queue advancement was client-only, so `POST /play` and `PUT /queue` via the external API couldn't advance the queue automatically. Also, play buttons sent `task.title` instead of `task.command ?? task.title`.
+
+**Fix:** Moved all queue advancement logic to the server.
+
+**Server (`server/src/http-server.ts`):**
+- Added `advanceQueue(sessionId)` — fires on every `input-waiting` event. If `session.queueRunning`, marks in-progress task done (`task-updated` SSE), sends next backlog task using `command ?? title`, marks it in-progress (`task-updated` SSE). Emits `queue-stopped` when backlog is empty.
+- Added `startQueue(projectId, sessionId)` — sets `queueRunning=true`, emits `queue-started`, sends the first backlog task (unless one is already in-progress).
+- `PUT /queue {running: true}` now calls `startQueue`; `{running: false}` emits `queue-stopped`.
+- `POST /play` simplified to validate + call `startQueue`.
+- Session `exit` event now clears `queueRunning` and emits `queue-stopped` + `task-updated` (done) server-side.
+
+**Web client (`web/src/App.tsx`):**
+- `input-waiting` handler reduced to just `setInputWaiting` — no more client-side queue logic.
+- `status` exit handler simplified — server handles task-done/queue-stop.
+- Added `task-updated` SSE handler (upserts task into store).
+- Added `queue-stopped` SSE handler (sets `sessionQueueRunning[sessionId] = false`).
+- `queue-started` handler simplified to just set `sessionQueueRunning[sessionId] = true`.
+- Removed `fetchTasks`, `sendCommand`, `updateTaskApi`, `setQueueRunningApi`, `setProjectTasks` from App.tsx.
+
+**Web client (`web/src/components/PlannerBoard.tsx`):**
+- `handlePlayNext` simplified: just calls `setQueueRunningApi(running)` — server kicks off first task automatically.
+- Removed `sendCommand` import.

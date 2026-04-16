@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '../store'
-import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, updateTaskApi, uploadImage } from '../api'
+import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, uploadImage, setQueueRunningApi } from '../api'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -222,7 +222,6 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     setPlannerSessionFilter,
     openSessionNotesEditor,
     projectTasks,
-    updateTaskInProject,
     sessionQueueRunning,
     setSessionQueueRunning,
   } = useAppStore()
@@ -302,25 +301,10 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   const handlePlayNext = useCallback(() => {
     if (!config || !ownerProject) return
-    if (activeQueueRunning) {
-      setSessionQueueRunning(activeSessionId, false)
-      return
-    }
-    setSessionQueueRunning(activeSessionId, true)
-    const tasks = projectTasks[ownerProject.id] ?? []
-    const inProgress = tasks.find(
-      (t) => t.assignedSessionId === activeSessionId && t.status === 'in-progress'
-    )
-    if (inProgress) return
-    if (!nextActiveTask) {
-      setSessionQueueRunning(activeSessionId, false)
-      return
-    }
-    sendCommand(config, activeSessionId, nextActiveTask.title).catch(() => {})
-    const updates = { status: 'in-progress' as const, assignedSessionId: activeSessionId }
-    updateTaskInProject(ownerProject.id, nextActiveTask.id, updates)
-    updateTaskApi(config, ownerProject.id, nextActiveTask.id, updates).catch(() => {})
-  }, [nextActiveTask, config, ownerProject, activeSessionId, updateTaskInProject, activeQueueRunning, setSessionQueueRunning, projectTasks])
+    const next = !activeQueueRunning
+    setSessionQueueRunning(activeSessionId, next)
+    setQueueRunningApi(config, ownerProject.id, activeSessionId, next).catch(() => {})
+  }, [config, ownerProject, activeSessionId, activeQueueRunning, setSessionQueueRunning])
 
   const handleAddRunner = async () => {
     if (!ownerProject || !config) return

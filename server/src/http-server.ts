@@ -78,13 +78,81 @@ export class HttpApiServer {
     })
     this.sessionManager.on('exit', (sessionId: string, exitCode: number) => {
       this.pushSse('status', { sessionId, status: 'exited', exitCode })
+      const projects = getProjects()
+      const project = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
+      if (!project) return
+      const session = project.sessions.find((s) => s.id === sessionId)
+      if (session?.queueRunning) {
+        setSessionQueueRunning(project.id, sessionId, false)
+        this.pushSse('queue-stopped', { sessionId, projectId: project.id })
+      }
+      const tasks = getTasksForProject(project.id)
+      const inProgress = tasks.find((t) => t.assignedSessionId === sessionId && t.status === 'in-progress')
+      if (inProgress) {
+        const done = updateTask(project.id, inProgress.id, { status: 'done', completedAt: Date.now() })
+        if (done) this.pushSse('task-updated', { projectId: project.id, task: done })
+      }
     })
     this.sessionManager.on('input-waiting', (sessionId: string) => {
       this.pushSse('input-waiting', { sessionId })
+      this.advanceQueue(sessionId)
     })
     this.sessionManager.on('cwd', (sessionId: string, cwd: string) => {
       this.pushSse('cwd', { sessionId, cwd })
     })
+  }
+
+  private advanceQueue(sessionId: string): void {
+    const projects = getProjects()
+    const project = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
+    if (!project) return
+    const session = project.sessions.find((s) => s.id === sessionId)
+    if (!session?.queueRunning) return
+
+    const tasks = getTasksForProject(project.id)
+
+    const inProgress = tasks.find((t) => t.assignedSessionId === sessionId && t.status === 'in-progress')
+    if (inProgress) {
+      const done = updateTask(project.id, inProgress.id, { status: 'done', completedAt: Date.now() })
+      if (done) this.pushSse('task-updated', { projectId: project.id, task: done })
+    }
+
+    const next = tasks
+      .filter((t) => t.status === 'backlog' && t.assignedSessionId === sessionId)
+      .sort((a, b) => a.order - b.order)[0]
+
+    if (!next) {
+      setSessionQueueRunning(project.id, sessionId, false)
+      this.pushSse('queue-stopped', { sessionId, projectId: project.id })
+      return
+    }
+
+    this.sessionManager.submitCommand(sessionId, next.command ?? next.title)
+    const updated = updateTask(project.id, next.id, { status: 'in-progress' })
+    if (updated) this.pushSse('task-updated', { projectId: project.id, task: updated })
+  }
+
+  private startQueue(projectId: string, sessionId: string): void {
+    const tasks = getTasksForProject(projectId)
+    setSessionQueueRunning(projectId, sessionId, true)
+    this.pushSse('queue-started', { sessionId, projectId })
+
+    const inProgress = tasks.find((t) => t.assignedSessionId === sessionId && t.status === 'in-progress')
+    if (inProgress) return
+
+    const next = tasks
+      .filter((t) => t.status === 'backlog' && t.assignedSessionId === sessionId)
+      .sort((a, b) => a.order - b.order)[0]
+
+    if (!next) {
+      setSessionQueueRunning(projectId, sessionId, false)
+      this.pushSse('queue-stopped', { sessionId, projectId })
+      return
+    }
+
+    this.sessionManager.submitCommand(sessionId, next.command ?? next.title)
+    const updated = updateTask(projectId, next.id, { status: 'in-progress' })
+    if (updated) this.pushSse('task-updated', { projectId, task: updated })
   }
 
   private pushSse(event: string, data: unknown): void {
@@ -281,14 +349,20 @@ export class HttpApiServer {
       return
     }
 
-    // PUT /api/projects/:pid/sessions/:sid/queue — set/clear server-side queue flag
+    // PUT /api/projects/:pid/sessions/:sid/queue — start or stop the task queue
     const sessionQueueMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/queue$/)
     if (req.method === 'PUT' && sessionQueueMatch) {
       this.readBody(req).then((body) => {
         try {
           const { running } = JSON.parse(body) as { running: boolean }
           if (typeof running !== 'boolean') return this.json(res, 400, { error: 'running must be boolean' })
-          setSessionQueueRunning(sessionQueueMatch[1], sessionQueueMatch[2], running)
+          const [, projectId, sessionId] = sessionQueueMatch
+          if (running) {
+            this.startQueue(projectId, sessionId)
+          } else {
+            setSessionQueueRunning(projectId, sessionId, false)
+            this.pushSse('queue-stopped', { sessionId, projectId })
+          }
           this.json(res, 200, { ok: true, running })
         } catch {
           this.json(res, 400, { error: 'Invalid JSON' })
@@ -439,22 +513,20 @@ export class HttpApiServer {
     }
 
     // POST /api/projects/:pid/sessions/:sid/play
-    // Mirrors the planner ▶ button: finds first backlog task assigned to the session,
-    // sends its title as a command, and marks it in-progress.
+    // Starts the task queue for a session: equivalent to PUT /queue {running: true}.
     const playMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/play$/)
     if (req.method === 'POST' && playMatch) {
       const [, projectId, sessionId] = playMatch
+      if (!this.sessionManager.getSessionMeta(sessionId)) {
+        return this.json(res, 404, { error: 'Session not found' })
+      }
       const tasks = getTasksForProject(projectId)
-      const next = tasks
-        .filter((t) => t.status === 'backlog' && t.assignedSessionId === sessionId)
-        .sort((a, b) => a.order - b.order)[0]
-      if (!next) return this.json(res, 404, { error: 'No backlog tasks assigned to this session' })
-      const ok = this.sessionManager.submitCommand(sessionId, next.title)
-      if (!ok) return this.json(res, 404, { error: 'Session not found' })
-      const updated = updateTask(projectId, next.id, { status: 'in-progress' })
-      setSessionQueueRunning(projectId, sessionId, true)
-      this.pushSse('queue-started', { sessionId, projectId })
-      return this.json(res, 200, { task: updated })
+      const hasWork = tasks.some(
+        (t) => t.assignedSessionId === sessionId && (t.status === 'backlog' || t.status === 'in-progress')
+      )
+      if (!hasWork) return this.json(res, 404, { error: 'No backlog tasks assigned to this session' })
+      this.startQueue(projectId, sessionId)
+      return this.json(res, 200, { ok: true })
     }
 
     // DELETE /api/projects/:pid/tasks/:tid

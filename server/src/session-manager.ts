@@ -52,7 +52,7 @@ interface PtySession {
 }
 
 const IDLE_MS = 1500
-const MIN_ACTIVITY_BYTES = 300
+const MIN_ACTIVITY_BYTES = 10
 
 const INSTANT_PROMPT_PATTERNS = [
   /\(y\/n\)\s*[?:]?\s*$/i,
@@ -94,7 +94,7 @@ function isProcessSleepingInForeground(pid: number): Promise<boolean> {
 async function isChildProcessWaitingForInput(shellPid: number): Promise<boolean> {
   try {
     const leafPid = await getLeafPid(shellPid)
-    if (leafPid === shellPid) return false
+    // No child process — check shell itself (handles "command not found" and other instant failures)
     return await isProcessSleepingInForeground(leafPid)
   } catch {
     return false

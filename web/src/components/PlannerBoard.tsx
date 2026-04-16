@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store'
-import { fetchTasks, addTaskApi, updateTaskApi, deleteTaskApi, sendCommand } from '../api'
+import { fetchTasks, addTaskApi, updateTaskApi, deleteTaskApi, setQueueRunningApi } from '../api'
 import type { TaskItem, TaskStatus, SessionStatus } from '../types'
 
 const COLUMNS: { key: TaskStatus; label: string; color: string; dotColor: string }[] = [
@@ -116,24 +116,10 @@ export default function PlannerBoard() {
 
   const handlePlayNext = useCallback(() => {
     if (!activeProjectId || !config || !selectedSessionId) return
-    if (queueRunning) {
-      setSessionQueueRunning(selectedSessionId, false)
-      return
-    }
-    setSessionQueueRunning(selectedSessionId, true)
-    const inProgress = allTasks.find(
-      (t) => t.assignedSessionId === selectedSessionId && t.status === 'in-progress'
-    )
-    if (inProgress) return
-    if (!nextTask) {
-      setSessionQueueRunning(selectedSessionId, false)
-      return
-    }
-    sendCommand(config, selectedSessionId, nextTask.title).catch(() => {})
-    const updates = { status: 'in-progress' as const, assignedSessionId: selectedSessionId }
-    updateTaskInProject(activeProjectId, nextTask.id, updates)
-    updateTaskApi(config, activeProjectId, nextTask.id, updates).catch(() => {})
-  }, [activeProjectId, config, selectedSessionId, queueRunning, nextTask, allTasks, setSessionQueueRunning, updateTaskInProject])
+    const next = !queueRunning
+    setSessionQueueRunning(selectedSessionId, next)
+    setQueueRunningApi(config, activeProjectId, selectedSessionId, next).catch(() => {})
+  }, [activeProjectId, config, selectedSessionId, queueRunning, setSessionQueueRunning])
 
   if (!project) return <div className="p-4 text-text-muted">No project selected</div>
 
