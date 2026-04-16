@@ -184,6 +184,11 @@ function buildPreviewLines(existing: string[], newData: string): string[] {
   return kept.slice(-6)
 }
 
+// Detect terminal mode synchronously from URL so the very first render is correct
+const _urlTerminalMode =
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('terminalMode') === '1'
+
 export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   sessionStates: {},
@@ -192,7 +197,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showAddSessionModal: false,
   showAddProjectModal: false,
   showConfigPanel: false,
-  isTerminalMode: false,
+  isTerminalMode: _urlTerminalMode,
   terminalModeSessionId: null,
   projectViewMode: {},
   plannerSessionFilter: {},
@@ -208,7 +213,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     serverPort: 7543,
     serverToken: '',
     serverEnabled: true,
-    windowMode: false,
+    windowMode: true,
     layoutMode: 'auto',
     keybindingOverrides: {}
   },

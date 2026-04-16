@@ -237,8 +237,9 @@ export default function App(): React.ReactElement {
     setSettings,
   } = useAppStore()
 
-  // If launched with ?terminalMode=1, auto-enter terminal mode after state loads
   const startInTerminalMode = new URLSearchParams(window.location.search).get('terminalMode') === '1'
+  // Standalone windows (Cmd+N) start fresh — no shared sessions
+  const isStandalone = new URLSearchParams(window.location.search).get('standalone') === '1'
 
   // Listen for menu Cmd+N and open same-type window (only in window/terminal mode)
   useEffect(() => {
@@ -258,14 +259,13 @@ export default function App(): React.ReactElement {
         if (state.settings) {
           setSettings(state.settings)
         }
-        if (state.projects && state.projects.length > 0) {
+        if (!isStandalone && state.projects && state.projects.length > 0) {
           setProjects(state.projects)
           setActiveProject(state.projects[0].id)
 
           for (const project of state.projects) {
             for (const session of project.sessions) {
               initSessionState(session.id, project.id)
-              // Start the pty process for every persisted session
               await window.api.createTerminal({
                 id: session.id,
                 name: session.name,
@@ -275,14 +275,15 @@ export default function App(): React.ReactElement {
               })
             }
           }
+        }
 
-          // Auto-enter terminal mode if launched with ?terminalMode=1
-          if (startInTerminalMode) {
-            const allSessions = state.projects.flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
-            useAppStore.getState().setTerminalModeSession(allSessions[0]?.id ?? null)
-            useAppStore.getState().setTerminalMode(true)
-            window.api.setWindowModeTemp(true)
-          }
+        // Auto-enter terminal mode if launched with ?terminalMode=1
+        if (startInTerminalMode) {
+          const allSessions = isStandalone
+            ? []
+            : (state.projects ?? []).flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
+          useAppStore.getState().setTerminalModeSession(allSessions[0]?.id ?? null)
+          useAppStore.getState().setTerminalMode(true)
         }
       } catch (err) {
         console.error('Failed to load initial state:', err)
@@ -562,7 +563,7 @@ export default function App(): React.ReactElement {
 }
 
 function MainTopBar(): React.ReactElement {
-  const { projects, activeProjectId, settings, setSettings, getActiveProject, getProjectViewMode, setProjectViewMode, setShowAddSessionModal, getSessionsForActiveProject, addSessionToProject, initSessionState, setTerminalMode, setTerminalModeSession } = useAppStore()
+  const { projects, activeProjectId, settings, setSettings, getActiveProject, getProjectViewMode, setProjectViewMode, setShowAddSessionModal, getSessionsForActiveProject, addSessionToProject, initSessionState, setTerminalMode, setTerminalModeSession, isTerminalMode } = useAppStore()
 
   const project = getActiveProject()
   const viewMode = activeProjectId ? getProjectViewMode(activeProjectId) : 'terminals'
@@ -632,39 +633,46 @@ function MainTopBar(): React.ReactElement {
             <span>Terminal</span>
           </button>
         )}
-        <div className="w-px h-4 bg-border-subtle mx-0.5" />
-        {/* Window mode toggle */}
-        <button
-          className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors border ${
-            settings.windowMode
-              ? 'text-accent-green border-accent-green/40 hover:border-accent-green/70 bg-accent-green/5'
-              : 'text-text-muted border-border-subtle/60 hover:text-text-primary hover:bg-bg-overlay'
-          }`}
-          onClick={() => {
-            const next = !settings.windowMode
-            setSettings({ windowMode: next })
-            window.api.setWindowMode(next)
-          }}
-          title={settings.windowMode ? 'Window mode — click to switch to tray mode' : 'Tray mode — click to switch to window mode'}
-        >
-          <span className="text-[12px] leading-none">{settings.windowMode ? '🖥' : '◼'}</span>
-          <span>{settings.windowMode ? 'Window' : 'Tray'}</span>
-        </button>
-        <div className="w-px h-4 bg-border-subtle mx-0.5" />
-        <button
-          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded-md transition-colors border border-border-subtle/60"
-          onClick={() => {
-            const sessions = projects.flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
-            setTerminalModeSession(sessions[0]?.id ?? null)
-            setTerminalMode(true)
-            // Terminal mode always runs as a proper window
-            window.api.setWindowModeTemp(true)
-          }}
-          title="Enter terminal mode"
-        >
-          <span className="font-mono text-[11px]">▣</span>
-          <span>Terminal Mode</span>
-        </button>
+        {/* Window mode toggle — hidden when already in terminal mode */}
+        {!isTerminalMode && (
+          <>
+            <div className="w-px h-4 bg-border-subtle mx-0.5" />
+            <button
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors border ${
+                settings.windowMode
+                  ? 'text-accent-green border-accent-green/40 hover:border-accent-green/70 bg-accent-green/5'
+                  : 'text-text-muted border-border-subtle/60 hover:text-text-primary hover:bg-bg-overlay'
+              }`}
+              onClick={() => {
+                const next = !settings.windowMode
+                setSettings({ windowMode: next })
+                window.api.setWindowMode(next)
+              }}
+              title={settings.windowMode ? 'Window mode — click to switch to tray mode' : 'Tray mode — click to switch to window mode'}
+            >
+              <span className="text-[12px] leading-none">{settings.windowMode ? '🖥' : '◼'}</span>
+              <span>{settings.windowMode ? 'Window' : 'Tray'}</span>
+            </button>
+          </>
+        )}
+        {/* Terminal Mode button — only shown in window mode */}
+        {settings.windowMode && (
+          <>
+            <div className="w-px h-4 bg-border-subtle mx-0.5" />
+            <button
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded-md transition-colors border border-border-subtle/60"
+              onClick={() => {
+                const sessions = projects.flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
+                setTerminalModeSession(sessions[0]?.id ?? null)
+                setTerminalMode(true)
+              }}
+              title="Enter terminal mode"
+            >
+              <span className="font-mono text-[11px]">▣</span>
+              <span>Terminal Mode</span>
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

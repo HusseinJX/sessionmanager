@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
+import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -774,6 +774,8 @@ function DraggableTabBar({
 // ── Main TerminalModeView ──────────────────────────────────────────────────────
 
 export default function TerminalModeView(): React.ReactElement {
+  const isStandalone = new URLSearchParams(window.location.search).get('standalone') === '1'
+
   const {
     projects,
     sessionStates,
@@ -781,6 +783,7 @@ export default function TerminalModeView(): React.ReactElement {
     terminalModeSessionId,
     setTerminalMode,
     setTerminalModeSession,
+    addProject,
     addSessionToProject,
     removeSessionFromProject,
     initSessionState,
@@ -793,20 +796,6 @@ export default function TerminalModeView(): React.ReactElement {
     reorderGroupsInProject,
   } = useAppStore()
 
-  // Capture the user's preferred window mode at mount time so we can restore it on exit
-  const prevWindowMode = useMemo(() => settings.windowMode, [])
-
-  // Cmd+N: open a new window
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
-      if (e.metaKey && e.key === 'n' && !e.shiftKey && !e.altKey && !e.ctrlKey) {
-        e.preventDefault()
-        window.api.newWindow({ terminalMode: true })
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
 
   // All top-level sessions across all projects (no parentSessionId)
   const allSessions = projects.flatMap((p) =>
@@ -891,10 +880,25 @@ export default function TerminalModeView(): React.ReactElement {
   const [cmdInput, setCmdInput] = useState('')
 
   const handleAddTab = (): void => {
-    const project = ownerProject ?? projects[0]
-    if (!project) return
+    let project = ownerProject ?? projects[0]
+    if (!project) {
+      if (!isStandalone) return
+      // Standalone: auto-create an in-memory project (never persisted)
+      const newProj = { id: uuidv4(), name: 'Workspace', sessions: [], tasks: [] }
+      addProject(newProj)
+      project = newProj
+    }
     const lastCwd = allSessions.at(-1)?.cwd ?? '~'
     const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
+    if (isStandalone) {
+      const id = uuidv4()
+      addSessionToProject(project.id, { id, name, cwd: lastCwd })
+      initSessionState(id, project.id)
+      window.api.createTerminal({ id, name, cwd: lastCwd, projectId: project.id })
+        .then(() => setTerminalModeSession(id))
+        .catch(console.error)
+      return
+    }
     window.api.addSessionToStore(project.id, { name, cwd: lastCwd }).then((stored) => {
       addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd })
       initSessionState(stored.id, project.id)
@@ -907,15 +911,12 @@ export default function TerminalModeView(): React.ReactElement {
     e.stopPropagation()
     const project = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
     if (!project) return
-
-    // Switch to another tab if closing the active one
     if (sessionId === resolvedId) {
       const others = allSessions.filter((s) => s.id !== sessionId)
       setTerminalModeSession(others[0]?.id ?? null)
     }
-
     await window.api.destroyTerminal(sessionId).catch(() => {})
-    await window.api.removeSessionFromStore(project.id, sessionId).catch(() => {})
+    if (!isStandalone) await window.api.removeSessionFromStore(project.id, sessionId).catch(() => {})
     removeSessionFromProject(project.id, sessionId)
   }
 
@@ -923,6 +924,15 @@ export default function TerminalModeView(): React.ReactElement {
     if (!ownerProject || !resolvedId) return
     const cwd = sessionStates[activeSubId]?.currentCwd ?? activeSession?.cwd ?? '~'
     const name = cwd.split('/').filter(Boolean).pop() ?? 'runner'
+    if (isStandalone) {
+      const id = uuidv4()
+      addSessionToProject(ownerProject.id, { id, name, cwd, parentSessionId: resolvedId })
+      initSessionState(id, ownerProject.id)
+      window.api.createTerminal({ id, name, cwd, projectId: ownerProject.id })
+        .then(() => setActiveSubId(id))
+        .catch(console.error)
+      return
+    }
     window.api.addSessionToStore(ownerProject.id, { name, cwd, parentSessionId: resolvedId })
       .then((stored) => {
         addSessionToProject(ownerProject.id, { id: stored.id, name, cwd, parentSessionId: resolvedId })
@@ -937,7 +947,7 @@ export default function TerminalModeView(): React.ReactElement {
     if (!ownerProject || !resolvedId) return
     if (activeSubId === id) setActiveSubId(resolvedId)
     await window.api.destroyTerminal(id).catch(() => {})
-    await window.api.removeSessionFromStore(ownerProject.id, id).catch(() => {})
+    if (!isStandalone) await window.api.removeSessionFromStore(ownerProject.id, id).catch(() => {})
     removeSessionFromProject(ownerProject.id, id)
   }
 
@@ -1035,8 +1045,6 @@ export default function TerminalModeView(): React.ReactElement {
           <button
             onClick={() => {
               setTerminalMode(false)
-              // Restore the window mode the user had before entering terminal mode
-              window.api.setWindowModeTemp(prevWindowMode)
             }}
             className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded transition-colors border border-border-subtle"
             title="Exit terminal mode"

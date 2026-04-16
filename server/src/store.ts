@@ -24,6 +24,7 @@ export interface SessionConfig {
   command?: string
   parentSessionId?: string
   notes?: string
+  queueRunning?: boolean
 }
 
 export interface ProjectConfig {
@@ -204,6 +205,15 @@ export function updateTask(
   Object.assign(task, updates)
   save()
   return task
+}
+
+export function setSessionQueueRunning(projectId: string, sessionId: string, running: boolean): void {
+  const project = store().projects.find((p) => p.id === projectId)
+  const session = project?.sessions.find((s) => s.id === sessionId)
+  if (session) {
+    session.queueRunning = running
+    save()
+  }
 }
 
 export function removeTask(projectId: string, taskId: string): void {

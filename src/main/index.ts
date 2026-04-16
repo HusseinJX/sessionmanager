@@ -13,7 +13,7 @@ let httpServer: HttpApiServer | null = null
 const isDev = !app.isPackaged
 
 // Read persisted window mode before app is ready (electron-store is sync)
-let windowMode: boolean = getSettings().windowMode ?? false
+let windowMode: boolean = getSettings().windowMode ?? true
 
 // macOS: hide from Dock unless window mode is active
 if (process.platform === 'darwin') {
@@ -69,6 +69,11 @@ function applyWindowModeCore(enabled: boolean): void {
       win.setVisibleOnAllWorkspaces(false)
       win.setWindowButtonVisibility(true)
     }
+    // Hide tray icon — not needed in windowed mode
+    if (tray && !tray.isDestroyed()) {
+      tray.destroy()
+      tray = null
+    }
   } else {
     // ── Tray mode ────────────────────────────────────────────────────────────
     registerHotkey()
@@ -78,6 +83,10 @@ function applyWindowModeCore(enabled: boolean): void {
       app.dock.hide()
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
       win.setWindowButtonVisibility(false)
+    }
+    // Restore tray icon when entering tray mode
+    if (!tray || tray.isDestroyed()) {
+      tray = createTrayIcon()
     }
   }
 }
@@ -178,8 +187,10 @@ function showWindow(): void {
 
 // ── BrowserWindow creation ─────────────────────────────────────────────────────
 
-function createWindow(opts?: { terminalMode?: boolean }): BrowserWindow {
+function createWindow(opts?: { terminalMode?: boolean; standalone?: boolean }): BrowserWindow {
   const settings = getSettings()
+  // Terminal-mode windows always behave as proper windowed apps, never as tray popups
+  const effectiveWindowMode = windowMode || !!opts?.terminalMode
 
   const w = new BrowserWindow({
     width: settings.windowWidth || 1200,
@@ -191,7 +202,7 @@ function createWindow(opts?: { terminalMode?: boolean }): BrowserWindow {
       ? { titleBarStyle: 'hiddenInset' as const }
       : { frame: false }),
     resizable: true,
-    skipTaskbar: !windowMode,
+    skipTaskbar: !effectiveWindowMode,
     alwaysOnTop: false,
     vibrancy: process.platform === 'darwin' ? 'sidebar' : undefined,
     webPreferences: {
@@ -204,7 +215,7 @@ function createWindow(opts?: { terminalMode?: boolean }): BrowserWindow {
 
   // Set initial workspace / traffic-light state
   if (process.platform === 'darwin') {
-    if (windowMode) {
+    if (effectiveWindowMode) {
       w.setVisibleOnAllWorkspaces(false)
       w.setWindowButtonVisibility(true)
     } else {
@@ -213,9 +224,9 @@ function createWindow(opts?: { terminalMode?: boolean }): BrowserWindow {
     }
   }
 
-  // Tray mode: hide on blur
+  // Tray mode: hide on blur (never applies to terminal-mode windows)
   w.on('blur', () => {
-    if (!isDev && !windowMode) w.hide()
+    if (!isDev && !windowMode && !opts?.terminalMode) w.hide()
   })
 
   // Persist window size
@@ -233,11 +244,18 @@ function createWindow(opts?: { terminalMode?: boolean }): BrowserWindow {
 
   if (isDev) {
     const base = process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173'
-    w.loadURL(opts?.terminalMode ? `${base}?terminalMode=1` : base)
+    const params = new URLSearchParams()
+    if (opts?.terminalMode) params.set('terminalMode', '1')
+    if (opts?.standalone) params.set('standalone', '1')
+    const query = params.toString()
+    w.loadURL(query ? `${base}?${query}` : base)
   } else {
     const filePath = path.join(__dirname, '../renderer/index.html')
-    if (opts?.terminalMode) {
-      w.loadFile(filePath, { query: { terminalMode: '1' } })
+    const query: Record<string, string> = {}
+    if (opts?.terminalMode) query['terminalMode'] = '1'
+    if (opts?.standalone) query['standalone'] = '1'
+    if (Object.keys(query).length > 0) {
+      w.loadFile(filePath, { query })
     } else {
       w.loadFile(filePath)
     }
@@ -272,12 +290,10 @@ function buildAppMenu(): void {
           label: 'New Window',
           accelerator: 'CmdOrCtrl+N',
           click: (_item, focusedWindow) => {
-            // Only meaningful in window mode — tray mode has no persistent window to duplicate.
-            if (!windowMode) return
             // Ask the focused renderer what type of window to open (terminal mode or normal).
             if (focusedWindow) {
               focusedWindow.webContents.send('menu:new-window')
-            } else {
+            } else if (windowMode) {
               const newWin = createWindow()
               newWin.show()
               newWin.focus()
@@ -311,9 +327,11 @@ async function init(): Promise<void> {
 
   buildAppMenu()
 
-  win = createWindow()
+  // Always open in terminal mode — session manager grid is accessible via the exit button
+  win = createWindow({ terminalMode: true })
   win.on('closed', () => { win = null })
-  tray = createTrayIcon()
+  // Only create tray icon in tray mode; windowed mode uses the Dock instead
+  tray = windowMode ? null : createTrayIcon()
 
   sessionManager.setWindow(win)
   sessionManager.setShowWindow(() => showWindow())
@@ -353,11 +371,25 @@ async function init(): Promise<void> {
   })
 
   // IPC: temporary window mode switch (does NOT save setting — used by terminal mode)
-  ipcMain.handle('window:set-mode-temp', async (_, { enabled }: { enabled: boolean }) => {
-    applyWindowModeCore(enabled)
-    if (enabled) {
-      win?.show()
-      win?.focus()
+  ipcMain.handle('window:set-mode-temp', async (event, { enabled }: { enabled: boolean }) => {
+    const senderWin = BrowserWindow.fromWebContents(event.sender)
+    if (senderWin && senderWin !== win) {
+      // Secondary window (e.g. a cloned terminal-mode window) — update only its own settings
+      if (process.platform === 'darwin') {
+        senderWin.setVisibleOnAllWorkspaces(!enabled, enabled ? undefined : { visibleOnFullScreen: true })
+        senderWin.setWindowButtonVisibility(enabled)
+      }
+      senderWin.setSkipTaskbar(!enabled)
+      if (enabled) {
+        senderWin.show()
+        senderWin.focus()
+      }
+    } else {
+      applyWindowModeCore(enabled)
+      if (enabled) {
+        win?.show()
+        win?.focus()
+      }
     }
     return { ok: true }
   })
@@ -381,7 +413,8 @@ async function init(): Promise<void> {
   })
 
   ipcMain.handle('window:new', async (_, opts?: { terminalMode?: boolean }) => {
-    const newWin = createWindow(opts)
+    // New terminal windows are standalone — they start fresh with no shared sessions
+    const newWin = createWindow({ ...opts, standalone: opts?.terminalMode })
     newWin.show()
     newWin.focus()
     return { ok: true }

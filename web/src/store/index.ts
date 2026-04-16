@@ -166,6 +166,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       // Initialize runtime states for all sessions
       const sessionStates = { ...state.sessionStates }
+      const sessionQueueRunning = { ...state.sessionQueueRunning }
       for (const project of projects) {
         for (const session of project.sessions) {
           if (!sessionStates[session.id]) {
@@ -190,13 +191,17 @@ export const useAppStore = create<AppState>((set, get) => ({
               currentCwd: session.currentCwd ?? sessionStates[session.id].currentCwd,
             }
           }
+          // Seed queue-running flag from server-persisted state
+          if (session.queueRunning !== undefined) {
+            sessionQueueRunning[session.id] = session.queueRunning
+          }
         }
       }
 
       const activeProjectId = state.activeProjectId
         ?? (projects.length > 0 ? projects[0].id : null)
 
-      return { projects, sessionStates, activeProjectId }
+      return { projects, sessionStates, activeProjectId, sessionQueueRunning }
     })
   },
 
