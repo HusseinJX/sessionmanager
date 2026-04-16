@@ -33,10 +33,14 @@ export interface SessionStatus {
   recentLines: string[]
 }
 
+const MAX_HISTORY_BYTES = 2 * 1024 * 1024  // 2MB raw PTY history for xterm.js replay
+const MAX_ANALYSIS_CHUNKS = 2000            // chunks kept for TUI line extraction + delta reads
+
 interface PtySession {
   pty: IPty
   meta: SessionMeta
-  outputBuffer: string[]
+  historyBuffer: string      // raw PTY bytes for full xterm.js replay, capped at MAX_HISTORY_BYTES
+  outputBuffer: string[]     // recent chunks for TUI analysis and delta reads
   batchBuffer: string
   inputWaiting: boolean
   lastOutputTime: number
@@ -279,6 +283,7 @@ export class SessionManager extends EventEmitter {
     const session: PtySession = {
       pty,
       meta: { ...meta, cwd, status: 'running' },
+      historyBuffer: '',
       outputBuffer: [],
       batchBuffer: '',
       inputWaiting: false,
@@ -296,9 +301,20 @@ export class SessionManager extends EventEmitter {
       session.lastOutputTime = Date.now()
       session.activityBytes += data.length
 
+      // Full history for xterm.js replay — cap at MAX_HISTORY_BYTES by trimming the front
+      session.historyBuffer += data
+      if (session.historyBuffer.length > MAX_HISTORY_BYTES) {
+        session.historyBuffer = session.historyBuffer.slice(-MAX_HISTORY_BYTES)
+      }
+
+      // Analysis buffer for TUI line extraction and delta reads
       session.outputBuffer.push(data)
-      if (session.outputBuffer.length > 500) {
-        session.outputBuffer = session.outputBuffer.slice(-400)
+      if (session.outputBuffer.length > MAX_ANALYSIS_CHUNKS) {
+        session.outputBuffer = session.outputBuffer.slice(-MAX_ANALYSIS_CHUNKS)
+        // Keep lastWriteBufferIdx in bounds
+        if (session.lastWriteBufferIdx > session.outputBuffer.length) {
+          session.lastWriteBufferIdx = 0
+        }
       }
 
       this.emit('output', meta.id, data)
@@ -362,6 +378,27 @@ export class SessionManager extends EventEmitter {
     return true
   }
 
+  // See src/main/session-manager.ts for the rationale: TUIs treat a long
+  // single-chunk write with a trailing \r as a paste containing a literal
+  // newline. Splitting text and \r across two writes makes the \r arrive in
+  // a separate read() so it's interpreted as Enter.
+  submitCommand(id: string, text: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session) return false
+    session.lastWriteBufferIdx = session.outputBuffer.length
+    session.pty.write(text)
+    session.hadInput = true
+    session.activityBytes = 0
+    if (session.inputWaiting) {
+      session.inputWaiting = false
+    }
+    setTimeout(() => {
+      const live = this.sessions.get(id)
+      if (live) live.pty.write('\r')
+    }, 40)
+    return true
+  }
+
   resizeSession(id: string, cols: number, rows: number): void {
     const session = this.sessions.get(id)
     if (!session || session.meta.status === 'exited') return
@@ -371,7 +408,7 @@ export class SessionManager extends EventEmitter {
   }
 
   getHistory(id: string): string {
-    return this.sessions.get(id)?.outputBuffer.join('') ?? ''
+    return this.sessions.get(id)?.historyBuffer ?? ''
   }
 
   getSessionMeta(id: string): SessionMeta | undefined {

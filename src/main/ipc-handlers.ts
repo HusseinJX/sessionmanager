@@ -16,9 +16,16 @@ import {
   reorderTasks,
   getTasksForProject,
   getNextTodoTask,
-  updateProjectNotes
+  updateProjectNotes,
+  updateSessionNotes,
+  addSessionGroup,
+  removeSessionGroup,
+  updateSessionGroup,
+  setSessionGroupId,
+  reorderProjectSessions,
+  reorderProjectGroups
 } from './store'
-import type { AppSettings, TaskItem, TaskStatus } from './store'
+import type { AppSettings, TaskItem, TaskStatus, SessionGroup } from './store'
 import { exportConfig, importConfig, applyImportedConfig, ExportConfig } from './config-io'
 
 export function registerIpcHandlers(win: BrowserWindow): void {
@@ -50,6 +57,11 @@ export function registerIpcHandlers(win: BrowserWindow): void {
 
   ipcMain.handle('terminal:input', async (_, { id, data }: { id: string; data: string }) => {
     sessionManager.writeToSession(id, data)
+    return { ok: true }
+  })
+
+  ipcMain.handle('terminal:submit', async (_, { id, text }: { id: string; text: string }) => {
+    sessionManager.submitCommand(id, text)
     return { ok: true }
   })
 
@@ -135,6 +147,14 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     }
   )
 
+  ipcMain.handle(
+    'session:update-notes',
+    async (_, { projectId, sessionId, notes }: { projectId: string; sessionId: string; notes: string }) => {
+      const session = updateSessionNotes(projectId, sessionId, notes)
+      return { ok: Boolean(session), session }
+    }
+  )
+
   // ─── Task / Planner management ─────────────────────────────────────────────
 
   ipcMain.handle(
@@ -204,6 +224,59 @@ export function registerIpcHandlers(win: BrowserWindow): void {
     'task:next',
     async (_, { projectId }: { projectId: string }) => {
       return getNextTodoTask(projectId)
+    }
+  )
+
+  // ─── Session groups ────────────────────────────────────────────────────────
+
+  ipcMain.handle(
+    'group:add',
+    async (_, { projectId, group }: { projectId: string; group: SessionGroup }) => {
+      addSessionGroup(projectId, group)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'group:remove',
+    async (_, { projectId, groupId }: { projectId: string; groupId: string }) => {
+      removeSessionGroup(projectId, groupId)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'group:update',
+    async (
+      _,
+      { projectId, groupId, updates }: { projectId: string; groupId: string; updates: Partial<Pick<SessionGroup, 'name' | 'color'>> }
+    ) => {
+      updateSessionGroup(projectId, groupId, updates)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'session:set-group',
+    async (_, { projectId, sessionId, groupId }: { projectId: string; sessionId: string; groupId: string | null }) => {
+      setSessionGroupId(projectId, sessionId, groupId)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'session:reorder',
+    async (_, { projectId, sessionIds }: { projectId: string; sessionIds: string[] }) => {
+      reorderProjectSessions(projectId, sessionIds)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'group:reorder',
+    async (_, { projectId, groupIds }: { projectId: string; groupIds: string[] }) => {
+      reorderProjectGroups(projectId, groupIds)
+      return { ok: true }
     }
   )
 

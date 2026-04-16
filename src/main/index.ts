@@ -26,7 +26,7 @@ if (process.platform === 'darwin') {
 
 function makeHotkeyHandler(): () => void {
   return () => {
-    if (win?.isVisible()) {
+    if (win && !win.isDestroyed() && win.isVisible()) {
       win.hide()
     } else {
       showWindow()
@@ -123,10 +123,14 @@ function createTrayIcon(): Tray {
   ])
 
   t.on('click', () => {
-    if (win?.isVisible()) win.hide()
-    else showWindow()
+    try {
+      if (win && !win.isDestroyed() && win.isVisible()) win.hide()
+      else showWindow()
+    } catch { /* ignore — fires during app teardown */ }
   })
-  t.on('right-click', () => t.popUpContextMenu(contextMenu))
+  t.on('right-click', () => {
+    try { t.popUpContextMenu(contextMenu) } catch { /* ignore — fires during app teardown */ }
+  })
 
   return t
 }
@@ -161,7 +165,12 @@ function positionWindowAtTray(): void {
 }
 
 function showWindow(): void {
-  if (!win) return
+  if (!win || win.isDestroyed()) {
+    win = createWindow()
+    win.on('closed', () => { win = null })
+    applyWindowModeCore(windowMode)
+    sessionManager.setWindow(win)
+  }
   if (!windowMode) positionWindowAtTray()
   win.show()
   win.focus()
@@ -169,7 +178,7 @@ function showWindow(): void {
 
 // ── BrowserWindow creation ─────────────────────────────────────────────────────
 
-function createWindow(): BrowserWindow {
+function createWindow(opts?: { terminalMode?: boolean }): BrowserWindow {
   const settings = getSettings()
 
   const w = new BrowserWindow({
@@ -223,9 +232,15 @@ function createWindow(): BrowserWindow {
   })
 
   if (isDev) {
-    w.loadURL(process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173')
+    const base = process.env['ELECTRON_RENDERER_URL'] || 'http://localhost:5173'
+    w.loadURL(opts?.terminalMode ? `${base}?terminalMode=1` : base)
   } else {
-    w.loadFile(path.join(__dirname, '../renderer/index.html'))
+    const filePath = path.join(__dirname, '../renderer/index.html')
+    if (opts?.terminalMode) {
+      w.loadFile(filePath, { query: { terminalMode: '1' } })
+    } else {
+      w.loadFile(filePath)
+    }
   }
 
   return w
@@ -256,10 +271,17 @@ function buildAppMenu(): void {
         {
           label: 'New Window',
           accelerator: 'CmdOrCtrl+N',
-          click: () => {
-            const newWin = createWindow()
-            newWin.show()
-            newWin.focus()
+          click: (_item, focusedWindow) => {
+            // Only meaningful in window mode — tray mode has no persistent window to duplicate.
+            if (!windowMode) return
+            // Ask the focused renderer what type of window to open (terminal mode or normal).
+            if (focusedWindow) {
+              focusedWindow.webContents.send('menu:new-window')
+            } else {
+              const newWin = createWindow()
+              newWin.show()
+              newWin.focus()
+            }
           }
         },
         { type: 'separator' as const },
@@ -290,6 +312,7 @@ async function init(): Promise<void> {
   buildAppMenu()
 
   win = createWindow()
+  win.on('closed', () => { win = null })
   tray = createTrayIcon()
 
   sessionManager.setWindow(win)
@@ -357,8 +380,8 @@ async function init(): Promise<void> {
     return { ok: true }
   })
 
-  ipcMain.handle('window:new', async () => {
-    const newWin = createWindow()
+  ipcMain.handle('window:new', async (_, opts?: { terminalMode?: boolean }) => {
+    const newWin = createWindow(opts)
     newWin.show()
     newWin.focus()
     return { ok: true }
@@ -416,6 +439,11 @@ function restoreSessionsFromStore(): void {
 app.whenReady().then(init)
 
 app.on('before-quit', () => {
+  // Destroy tray first so no more click/right-click events fire during teardown
+  if (tray && !tray.isDestroyed()) {
+    tray.destroy()
+    tray = null
+  }
   httpServer?.stop()
   sessionManager.killAll()
   globalShortcut.unregisterAll()

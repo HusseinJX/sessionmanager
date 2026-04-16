@@ -142,10 +142,12 @@ export class TelegramBridge {
       if (this.switchedSessionId && this.bot) {
         // Single digit → send as bare keystroke (for numbered menus like Claude Code)
         const isBareKey = /^\d$/.test(msg.text.trim())
-        const toSend = isBareKey ? msg.text.trim() : msg.text + '\r'
-        this.sessionManager.writeToSession(this.switchedSessionId, toSend)
-        const output = await this.waitForOutput(this.switchedSessionId, 2000, 120000, msg.text)
-        const sent = await this.bot.sendMessage(msg.chat.id, `[${this.switchedLabel}]\n$ ${msg.text}\n\n${output}`)
+        if (isBareKey) {
+          this.sessionManager.writeToSession(this.switchedSessionId, msg.text.trim())
+        } else {
+          this.sessionManager.submitCommand(this.switchedSessionId, msg.text)
+        }
+        const sent = await this.bot.sendMessage(msg.chat.id, `🤖 *${escapeMarkdown(this.switchedLabel)}*`, { parse_mode: 'Markdown' })
         messageToSession.set(sent.message_id, this.switchedSessionId)
         return
       }
@@ -155,9 +157,16 @@ export class TelegramBridge {
         const sessionId = messageToSession.get(msg.reply_to_message.message_id)
         if (sessionId && this.bot) {
           const isBareKey = /^\d$/.test(msg.text.trim())
-          this.sessionManager.writeToSession(sessionId, isBareKey ? msg.text.trim() : msg.text + '\r')
-          const output = await this.waitForOutput(sessionId, 2000, 120000, msg.text)
-          const sent = await this.bot.sendMessage(msg.chat.id, `$ ${msg.text}\n\n${output}`, {
+          if (isBareKey) {
+            this.sessionManager.writeToSession(sessionId, msg.text.trim())
+          } else {
+            this.sessionManager.submitCommand(sessionId, msg.text)
+          }
+          const sessions = this.sessionManager.getAllSessionsStatus()
+          const session = sessions.find((s) => s.id === sessionId)
+          const label = session ? `${session.projectName ?? ''} › ${session.name}`.replace(/^ › /, '') : sessionId
+          const sent = await this.bot.sendMessage(msg.chat.id, `🤖 *${escapeMarkdown(label)}*`, {
+            parse_mode: 'Markdown',
             reply_to_message_id: msg.message_id,
           })
           messageToSession.set(sent.message_id, sessionId)
@@ -278,10 +287,7 @@ export class TelegramBridge {
     this.switchedSessionId = resolved.session.id
     this.switchedLabel = `${letter}${num} — ${resolved.projectName} › ${resolved.session.name}`
 
-    // Show current output on switch
-    const lines = (this.sessionManager.getRecentLines(resolved.session.id, 50) ?? []).slice(-30)
-    const output = lines.join('\n') || '(no output)'
-    await this.bot.sendMessage(chatId, `Switched to *${escapeMarkdown(this.switchedLabel)}*\nEverything you type goes to this terminal. Type \`switch off\` to exit.\n\`\`\`\n${output}\n\`\`\``, { parse_mode: 'Markdown' })
+    await this.bot.sendMessage(chatId, `✅ Switched to *${escapeMarkdown(this.switchedLabel)}*`, { parse_mode: 'Markdown' })
   }
 
   private resolveShorthand(groupLetter: string, terminalNum: number): { session: { id: string; name: string }; projectName: string } | string {
@@ -305,10 +311,9 @@ export class TelegramBridge {
     const { session, projectName } = resolved
 
     if (command) {
-      // Send command, wait for output to settle, then read logs
-      this.sessionManager.writeToSession(session.id, command + '\r')
-      const output = await this.waitForOutput(session.id, 2000, 120000, command)
-      const text = `*${escapeMarkdown(projectName)}* › *${escapeMarkdown(session.name)}*\n\`$ ${escapeMarkdown(command)}\`\n\`\`\`\n${output}\n\`\`\``
+      // Send command, notify which session is responding
+      this.sessionManager.submitCommand(session.id, command)
+      const text = `🤖 *${escapeMarkdown(projectName)}* › *${escapeMarkdown(session.name)}*`
       const sent = await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' })
       messageToSession.set(sent.message_id, session.id)
     } else {
@@ -411,7 +416,7 @@ export class TelegramBridge {
       case 'send_command': {
         const id = args.session_id as string
         const cmd = args.command as string
-        const ok = this.sessionManager.writeToSession(id, cmd + '\r')
+        const ok = this.sessionManager.submitCommand(id, cmd)
         if (!ok) return { error: 'Session not found' }
         return { ok: true, sessionId: id, command: cmd }
       }

@@ -4,6 +4,7 @@ export interface SessionConfig {
   cwd: string
   command?: string
   parentSessionId?: string
+  notes?: string
 }
 
 export interface SessionStatus extends SessionConfig {
@@ -27,7 +28,7 @@ export interface ServerConfig {
   token: string
 }
 
-export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'done'
+export type TaskStatus = 'backlog' | 'in-progress' | 'done'
 
 export interface TaskItem {
   id: string

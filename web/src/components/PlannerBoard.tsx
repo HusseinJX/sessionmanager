@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store'
-import { fetchTasks, addTaskApi, updateTaskApi, deleteTaskApi, sendInput } from '../api'
+import { fetchTasks, addTaskApi, updateTaskApi, deleteTaskApi, sendCommand } from '../api'
 import type { TaskItem, TaskStatus, SessionStatus } from '../types'
 
 const COLUMNS: { key: TaskStatus; label: string; color: string; dotColor: string }[] = [
@@ -129,7 +129,7 @@ export default function PlannerBoard() {
       setSessionQueueRunning(selectedSessionId, false)
       return
     }
-    sendInput(config, selectedSessionId, nextTask.title + '\r').catch(() => {})
+    sendCommand(config, selectedSessionId, nextTask.title).catch(() => {})
     const updates = { status: 'in-progress' as const, assignedSessionId: selectedSessionId }
     updateTaskInProject(activeProjectId, nextTask.id, updates)
     updateTaskApi(config, activeProjectId, nextTask.id, updates).catch(() => {})

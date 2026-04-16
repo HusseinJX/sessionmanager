@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('api', {
   sendInput: (id: string, data: string): Promise<void> =>
     ipcRenderer.invoke('terminal:input', { id, data }),
 
+  submitCommand: (id: string, text: string): Promise<void> =>
+    ipcRenderer.invoke('terminal:submit', { id, text }),
+
   resizeTerminal: (id: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('terminal:resize', { id, cols, rows }),
 
@@ -159,6 +162,37 @@ contextBridge.exposeInMainWorld('api', {
   getNextTask: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke('task:next', { projectId }),
 
+  // ─── Session groups ──────────────────────────────────────────────────────
+
+  addGroup: (
+    projectId: string,
+    group: { id: string; name: string; color: string }
+  ): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('group:add', { projectId, group }),
+
+  removeGroup: (projectId: string, groupId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('group:remove', { projectId, groupId }),
+
+  updateGroup: (
+    projectId: string,
+    groupId: string,
+    updates: { name?: string; color?: string }
+  ): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('group:update', { projectId, groupId, updates }),
+
+  setSessionGroup: (
+    projectId: string,
+    sessionId: string,
+    groupId: string | null
+  ): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('session:set-group', { projectId, sessionId, groupId }),
+
+  reorderSessions: (projectId: string, sessionIds: string[]): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('session:reorder', { projectId, sessionIds }),
+
+  reorderGroups: (projectId: string, groupIds: string[]): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('group:reorder', { projectId, groupIds }),
+
   // ─── Config export/import ────────────────────────────────────────────────
 
   exportConfig: (): Promise<{ ok: boolean }> =>
@@ -208,6 +242,12 @@ contextBridge.exposeInMainWorld('api', {
   closeWindow: (): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:close'),
 
-  newWindow: (): Promise<{ ok: boolean }> =>
-    ipcRenderer.invoke('window:new')
+  newWindow: (opts?: { terminalMode?: boolean }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:new', opts),
+
+  onMenuNewWindow: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('menu:new-window', handler)
+    return () => ipcRenderer.removeListener('menu:new-window', handler)
+  }
 })

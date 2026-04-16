@@ -129,7 +129,7 @@ export default function PlannerBoard(): React.ReactElement {
       setSessionQueueRunning(selectedSessionId, false)
       return
     }
-    void window.api.sendInput(selectedSessionId, nextTask.title + '\r')
+    void window.api.submitCommand(selectedSessionId, nextTask.title)
     const updates = { status: 'in-progress' as const, assignedSessionId: selectedSessionId }
     updateTaskInProject(activeProjectId, nextTask.id, updates)
     void window.api.updateTask(activeProjectId, nextTask.id, updates)

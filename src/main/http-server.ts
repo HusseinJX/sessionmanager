@@ -124,7 +124,7 @@ export class HttpApiServer {
 
   private cors(res: http.ServerResponse): void {
     res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   }
 
@@ -290,7 +290,7 @@ export class HttpApiServer {
           this.json(res, 400, { error: 'Body must contain a "command" string' })
           return
         }
-        const ok = this.sessionManager.writeToSession(sessionId, command + '\r')
+        const ok = this.sessionManager.submitCommand(sessionId, command)
         if (!ok) {
           this.json(res, 404, { error: 'Session not found' })
           return

@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 
-export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'done'
+export type TaskStatus = 'backlog' | 'in-progress' | 'done'
 
 export interface TaskItem {
   id: string
@@ -23,6 +23,7 @@ export interface SessionConfig {
   cwd: string
   command?: string
   parentSessionId?: string
+  notes?: string
 }
 
 export interface ProjectConfig {
@@ -154,6 +155,15 @@ export function updateSessionCwd(sessionId: string, cwd: string): void {
       return
     }
   }
+}
+
+export function updateSessionNotes(projectId: string, sessionId: string, notes: string): SessionConfig | null {
+  const project = store().projects.find((p) => p.id === projectId)
+  const session = project?.sessions.find((s) => s.id === sessionId)
+  if (!session) return null
+  session.notes = notes
+  save()
+  return session
 }
 
 // --- Task CRUD ---

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useAppStore } from './store'
-import { fetchProjects, fetchLogs, sseUrl, fetchTelegramNotifications, setTelegramNotifications } from './api'
+import { fetchProjects, fetchLogs, sseUrl, fetchTelegramNotifications, setTelegramNotifications, updateTaskApi, sendCommand } from './api'
 import type { ServerConfig, SessionStatus } from './types'
 import ConnectionSetup from './components/ConnectionSetup'
 import ProjectTabs from './components/ProjectTabs'
 import TerminalGrid from './components/TerminalGrid'
 import PlannerBoard from './components/PlannerBoard'
 import ExpandedSession from './components/ExpandedSession'
+import SessionNotesModal from './components/SessionNotesModal'
 
 export default function App() {
   const {
@@ -27,6 +28,7 @@ export default function App() {
     updateSessionCwd,
     appendOutput,
     setSessionLogs,
+    sessionNotesEditor,
   } = useAppStore()
 
   const viewMode = activeProjectId ? (projectViewMode[activeProjectId] ?? 'terminals') : 'terminals'
@@ -111,12 +113,61 @@ export default function App() {
         exitCode?: number
       }
       updateSessionStatus(sessionId, status, exitCode)
+
+      // When a session exits, stop auto-advance and mark any in-progress task as done.
+      // (A dead pty can't accept more input, so the queue can't continue.)
+      if (status === 'exited') {
+        const state = useAppStore.getState()
+        if (state.sessionQueueRunning[sessionId]) {
+          state.setSessionQueueRunning(sessionId, false)
+        }
+        const project = state.projects.find((p) => p.sessions.some((s) => s.id === sessionId))
+        if (!project) return
+        const projectTasks = state.projectTasks[project.id] ?? []
+        const assignedTask = projectTasks.find(
+          (t) => t.assignedSessionId === sessionId && t.status === 'in-progress'
+        )
+        if (!assignedTask) return
+
+        const doneUpdates = { status: 'done' as const, completedAt: Date.now() }
+        state.updateTaskInProject(project.id, assignedTask.id, doneUpdates)
+        updateTaskApi(config, project.id, assignedTask.id, doneUpdates).catch(() => {})
+      }
     })
 
     es.addEventListener('input-waiting', (e: MessageEvent<string>) => {
       if (!mounted) return
       const { sessionId } = JSON.parse(e.data) as { sessionId: string }
       setInputWaiting(sessionId, true)
+
+      // Auto-advance the task queue for this session if the play button has
+      // been engaged. Fires once per idle transition — after the in-progress
+      // task's command returns to the prompt, we mark it done and send the
+      // next backlog task to the terminal.
+      const state = useAppStore.getState()
+      if (!state.sessionQueueRunning[sessionId]) return
+      const project = state.projects.find((p) => p.sessions.some((s) => s.id === sessionId))
+      if (!project) return
+      const tasks = state.projectTasks[project.id] ?? []
+      const inProgress = tasks.find(
+        (t) => t.assignedSessionId === sessionId && t.status === 'in-progress'
+      )
+      if (inProgress) {
+        const doneUpdates = { status: 'done' as const, completedAt: Date.now() }
+        state.updateTaskInProject(project.id, inProgress.id, doneUpdates)
+        updateTaskApi(config, project.id, inProgress.id, doneUpdates).catch(() => {})
+      }
+      const next = tasks
+        .filter((t) => t.status === 'backlog' && t.assignedSessionId === sessionId)
+        .sort((a, b) => a.order - b.order)[0]
+      if (!next) {
+        state.setSessionQueueRunning(sessionId, false)
+        return
+      }
+      sendCommand(config, sessionId, next.title).catch(() => {})
+      const nextUpdates = { status: 'in-progress' as const, assignedSessionId: sessionId }
+      state.updateTaskInProject(project.id, next.id, nextUpdates)
+      updateTaskApi(config, project.id, next.id, nextUpdates).catch(() => {})
     })
 
     es.addEventListener('cwd', (e: MessageEvent<string>) => {
@@ -217,6 +268,13 @@ export default function App() {
       {/* Expanded session overlay */}
       {expandedSessionId && (
         <ExpandedSession sessionId={expandedSessionId} />
+      )}
+
+      {sessionNotesEditor && (
+        <SessionNotesModal
+          projectId={sessionNotesEditor.projectId}
+          sessionId={sessionNotesEditor.sessionId}
+        />
       )}
     </div>
   )

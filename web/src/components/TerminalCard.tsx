@@ -1,7 +1,7 @@
 import { useState, useRef, KeyboardEvent } from 'react'
 import { useAppStore } from '../store'
-import type { SessionStatus, ServerConfig } from '../types'
-import { sendCommand } from '../api'
+import type { SessionStatus } from '../types'
+import { sendCommand, deleteSession, updateTaskApi } from '../api'
 
 function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: boolean }) {
   if (inputWaiting) {
@@ -30,11 +30,26 @@ function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: b
 
 interface TerminalCardProps {
   session: SessionStatus
+  projectId: string
 }
 
-export default function TerminalCard({ session }: TerminalCardProps) {
-  const { sessionStates, setExpandedSession, config } = useAppStore()
+export default function TerminalCard({ session, projectId }: TerminalCardProps) {
+  const {
+    sessionStates,
+    setExpandedSession,
+    config,
+    activeProjectId,
+    setProjectViewMode,
+    setPlannerSessionFilter,
+    openSessionNotesEditor,
+    removeSessionFromProject,
+    projectTasks,
+    updateTaskInProject,
+    sessionQueueRunning,
+    setSessionQueueRunning,
+  } = useAppStore()
   const [cmdInput, setCmdInput] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const runtimeState = sessionStates[session.id]
@@ -48,6 +63,7 @@ export default function TerminalCard({ session }: TerminalCardProps) {
   const cwdDisplay = liveCwd
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
+  const hasNotes = Boolean(session.notes?.trim())
 
   const handleSend = (e?: React.MouseEvent) => {
     e?.stopPropagation()
@@ -60,6 +76,67 @@ export default function TerminalCard({ session }: TerminalCardProps) {
   const handleInputKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     e.stopPropagation()
     if (e.key === 'Enter') handleSend()
+  }
+
+  const handleOpenPlanner = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!activeProjectId) return
+    setPlannerSessionFilter(activeProjectId, session.id)
+    setProjectViewMode(activeProjectId, 'planner')
+  }
+
+  const handleRemove = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      setTimeout(() => setConfirmDelete(false), 3000)
+      return
+    }
+    if (config) await deleteSession(config, projectId, session.id).catch(console.error)
+    removeSessionFromProject(projectId, session.id)
+  }
+
+  const handleOpenNotes = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!activeProjectId) return
+    openSessionNotesEditor(activeProjectId, session.id)
+  }
+
+  const sessionProjectTasks = activeProjectId ? (projectTasks[activeProjectId] ?? []) : []
+  const assignedBacklog = sessionProjectTasks
+    .filter((t) => t.status === 'backlog' && t.assignedSessionId === session.id)
+    .sort((a, b) => a.order - b.order)
+  const queueCount = assignedBacklog.length
+  const nextTask = assignedBacklog[0]
+  const queueRunning = sessionQueueRunning[session.id] ?? false
+  const showQueueButton = queueCount > 0 || queueRunning
+
+  const handlePlayNext = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!config || !activeProjectId) return
+
+    // Toggle: running → stop
+    if (queueRunning) {
+      setSessionQueueRunning(session.id, false)
+      return
+    }
+
+    // Start auto-advance. If nothing is already in-progress on this session,
+    // kick it off by sending the first backlog task now; otherwise let the
+    // next input-waiting transition pick it up.
+    setSessionQueueRunning(session.id, true)
+    const inProgress = sessionProjectTasks.find(
+      (t) => t.assignedSessionId === session.id && t.status === 'in-progress'
+    )
+    if (inProgress) return
+    if (!nextTask) {
+      setSessionQueueRunning(session.id, false)
+      return
+    }
+    sendCommand(config, session.id, nextTask.title).catch(console.error)
+    const updates = { status: 'in-progress' as const, assignedSessionId: session.id }
+    updateTaskInProject(activeProjectId, nextTask.id, updates)
+    updateTaskApi(config, activeProjectId, nextTask.id, updates).catch(() => {})
   }
 
   return (
@@ -85,11 +162,55 @@ export default function TerminalCard({ session }: TerminalCardProps) {
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-medium text-text-primary truncate">{liveDisplayName}</span>
+          <button
+            className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"
+            title="Open planner filtered to this terminal"
+            onClick={handleOpenPlanner}
+          >
+            plan
+          </button>
+          <button
+            className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 ${
+              hasNotes
+                ? 'text-accent-blue border-accent-blue/40 hover:text-text-primary'
+                : 'text-text-muted border-border-subtle hover:text-text-primary'
+            }`}
+            title="View or edit terminal notes"
+            onClick={handleOpenNotes}
+          >
+            notes
+          </button>
+          {showQueueButton && (
+            <button
+              className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 transition-colors hover:text-text-primary ${
+                queueRunning
+                  ? 'text-yellow-400 border-yellow-400/40 animate-pulse'
+                  : 'text-accent-green border-accent-green/40'
+              }`}
+              title={
+                queueRunning
+                  ? `Auto-advancing task queue — click to stop (${queueCount} remaining)`
+                  : `Start auto-advance: send next task "${nextTask?.title}" and continue through backlog (${queueCount} queued)`
+              }
+              onClick={handlePlayNext}
+            >
+              {queueRunning ? `⏸ ${queueCount}` : `▶ ${queueCount}`}
+            </button>
+          )}
           {hasNewOutput && (
             <span className="w-1.5 h-1.5 rounded-full bg-accent-blue flex-shrink-0" title="New output" />
           )}
         </div>
-        <StatusBadge status={status} inputWaiting={inputWaiting} />
+        <div className="flex items-center gap-2">
+          <StatusBadge status={status} inputWaiting={inputWaiting} />
+          <button
+            className={`text-xs transition-all ${confirmDelete ? 'text-accent-red' : 'text-text-muted hover:text-accent-red'}`}
+            onClick={handleRemove}
+            title={confirmDelete ? 'Click again to confirm' : 'Remove session'}
+          >
+            {confirmDelete ? '✕ confirm' : '✕'}
+          </button>
+        </div>
       </div>
 
       {/* Working directory */}

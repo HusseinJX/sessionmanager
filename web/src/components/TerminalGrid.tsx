@@ -81,7 +81,7 @@ export default function TerminalGrid() {
         style={{ gridTemplateColumns: getGridTemplate(layoutMode) }}
       >
         {sessions.map((session) => (
-          <TerminalCard key={session.id} session={session} />
+          <TerminalCard key={session.id} session={session} projectId={project.id} />
         ))}
         <button
           className="flex items-center justify-center min-h-[120px] border border-dashed border-border-subtle rounded-lg text-text-muted hover:text-accent-green hover:border-accent-green transition-colors"

@@ -24,6 +24,7 @@ declare global {
       }) => Promise<{ id: string }>
       destroyTerminal: (id: string) => Promise<{ ok: boolean }>
       sendInput: (id: string, data: string) => Promise<void>
+      submitCommand: (id: string, text: string) => Promise<void>
       resizeTerminal: (id: string, cols: number, rows: number) => Promise<void>
       getHistory: (id: string) => Promise<string>
       isInputWaiting: (id: string) => Promise<boolean>
@@ -92,6 +93,12 @@ declare global {
       removeTask: (projectId: string, taskId: string) => Promise<{ ok: boolean }>
       reorderTasks: (projectId: string, taskIds: string[]) => Promise<{ ok: boolean }>
       getNextTask: (projectId: string) => Promise<unknown>
+      addGroup: (projectId: string, group: { id: string; name: string; color: string }) => Promise<{ ok: boolean }>
+      removeGroup: (projectId: string, groupId: string) => Promise<{ ok: boolean }>
+      updateGroup: (projectId: string, groupId: string, updates: { name?: string; color?: string }) => Promise<{ ok: boolean }>
+      setSessionGroup: (projectId: string, sessionId: string, groupId: string | null) => Promise<{ ok: boolean }>
+      reorderSessions: (projectId: string, sessionIds: string[]) => Promise<{ ok: boolean }>
+      reorderGroups: (projectId: string, groupIds: string[]) => Promise<{ ok: boolean }>
       exportConfig: () => Promise<{ ok: boolean }>
       importConfig: () => Promise<unknown>
       applyImportedConfig: (
@@ -112,7 +119,8 @@ declare global {
       minimizeWindow: () => Promise<{ ok: boolean }>
       maximizeWindow: () => Promise<{ ok: boolean }>
       closeWindow: () => Promise<{ ok: boolean }>
-      newWindow: () => Promise<{ ok: boolean }>
+      newWindow: (opts?: { terminalMode?: boolean }) => Promise<{ ok: boolean }>
+      onMenuNewWindow: (callback: () => void) => () => void
     }
   }
 }
@@ -229,6 +237,19 @@ export default function App(): React.ReactElement {
     setSettings,
   } = useAppStore()
 
+  // If launched with ?terminalMode=1, auto-enter terminal mode after state loads
+  const startInTerminalMode = new URLSearchParams(window.location.search).get('terminalMode') === '1'
+
+  // Listen for menu Cmd+N and open same-type window (only in window/terminal mode)
+  useEffect(() => {
+    const remove = window.api.onMenuNewWindow(() => {
+      const state = useAppStore.getState()
+      if (!state.settings.windowMode && !state.isTerminalMode) return
+      window.api.newWindow({ terminalMode: state.isTerminalMode })
+    })
+    return remove
+  }, [])
+
   // Load initial state from main process and restart all pty processes
   useEffect(() => {
     async function loadInitialState(): Promise<void> {
@@ -254,6 +275,14 @@ export default function App(): React.ReactElement {
               })
             }
           }
+
+          // Auto-enter terminal mode if launched with ?terminalMode=1
+          if (startInTerminalMode) {
+            const allSessions = state.projects.flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
+            useAppStore.getState().setTerminalModeSession(allSessions[0]?.id ?? null)
+            useAppStore.getState().setTerminalMode(true)
+            window.api.setWindowModeTemp(true)
+          }
         }
       } catch (err) {
         console.error('Failed to load initial state:', err)
@@ -271,50 +300,24 @@ export default function App(): React.ReactElement {
     const removeExit = window.api.onExit(({ id, code }) => {
       updateSessionStatus(id, 'exited', code)
 
-      // Auto-advance: if session was linked to a task and exited successfully, mark done & start next
-      if (code === 0) {
-        const state = useAppStore.getState()
-        const sessionState = state.sessionStates[id]
-        if (!sessionState) return
+      // When a session exits, stop auto-advance and mark any in-progress task as done.
+      // (A dead pty can't accept more input, so the queue can't continue.)
+      const state = useAppStore.getState()
+      if (state.sessionQueueRunning[id]) {
+        state.setSessionQueueRunning(id, false)
+      }
+      const sessionState = state.sessionStates[id]
+      if (sessionState) {
         const project = state.projects.find((p) => p.id === sessionState.projectId)
-        if (!project?.tasks) return
-
-        const assignedTask = project.tasks.find(
-          (t) => t.assignedSessionId === id && t.status === 'in-progress'
-        )
-        if (assignedTask) {
-          const updates = { status: 'done' as const, completedAt: Date.now(), assignedSessionId: undefined }
-          state.updateTaskInProject(project.id, assignedTask.id, updates)
-          window.api.updateTask(project.id, assignedTask.id, updates)
-
-          // Auto-start next todo task
-          window.api.getNextTask(project.id).then((next) => {
-            if (!next) return
-            const nextTask = next as { id: string; title: string; command?: string; cwd?: string }
-            if (!nextTask.command) return
-            const cwd = nextTask.cwd || project.sessions[0]?.cwd || '~'
-            const name = nextTask.title
-            window.api.addSessionToStore(project.id, { name, cwd, command: nextTask.command }).then((stored) => {
-              const st = useAppStore.getState()
-              st.addSessionToProject(project.id, { id: stored.id, name, cwd, command: nextTask.command })
-              st.initSessionState(stored.id, project.id)
-              st.updateTaskInProject(project.id, nextTask.id, {
-                status: 'in-progress',
-                assignedSessionId: stored.id
-              })
-              window.api.updateTask(project.id, nextTask.id, {
-                status: 'in-progress',
-                assignedSessionId: stored.id
-              })
-              return window.api.createTerminal({
-                id: stored.id,
-                name,
-                cwd,
-                command: nextTask.command,
-                projectId: project.id
-              })
-            })
-          })
+        if (project?.tasks) {
+          const assignedTask = project.tasks.find(
+            (t) => t.assignedSessionId === id && t.status === 'in-progress'
+          )
+          if (assignedTask) {
+            const updates = { status: 'done' as const, completedAt: Date.now(), assignedSessionId: undefined }
+            state.updateTaskInProject(project.id, assignedTask.id, updates)
+            window.api.updateTask(project.id, assignedTask.id, updates)
+          }
         }
       }
     })
@@ -327,6 +330,34 @@ export default function App(): React.ReactElement {
       if (!terminalIsOpen) {
         playAlertChime()
       }
+
+      // Auto-advance the task queue if the play button has been engaged.
+      // Fires once per idle transition — after the in-progress task returns to
+      // the prompt, mark it done and send the next backlog task.
+      const state = useAppStore.getState()
+      if (!state.sessionQueueRunning[id]) return
+      const project = state.projects.find((p) => p.sessions.some((s) => s.id === id))
+      if (!project) return
+      const tasks = project.tasks ?? []
+      const inProgress = tasks.find(
+        (t) => t.assignedSessionId === id && t.status === 'in-progress'
+      )
+      if (inProgress) {
+        const doneUpdates = { status: 'done' as const, completedAt: Date.now() }
+        state.updateTaskInProject(project.id, inProgress.id, doneUpdates)
+        void window.api.updateTask(project.id, inProgress.id, doneUpdates)
+      }
+      const next = tasks
+        .filter((t) => t.status === 'backlog' && t.assignedSessionId === id)
+        .sort((a, b) => a.order - b.order)[0]
+      if (!next) {
+        state.setSessionQueueRunning(id, false)
+        return
+      }
+      void window.api.submitCommand(id, next.title)
+      const nextUpdates = { status: 'in-progress' as const, assignedSessionId: id }
+      state.updateTaskInProject(project.id, next.id, nextUpdates)
+      void window.api.updateTask(project.id, next.id, nextUpdates)
     })
 
     const removeInputResolved = window.api.onInputResolved(({ id }) => {
@@ -405,11 +436,11 @@ export default function App(): React.ReactElement {
       if (inInput && !e.metaKey && !e.ctrlKey) return
 
       // ── App shortcuts ───────────────────────────────────────────────
-      // Cmd+N: open a new window when in window mode or terminal mode
+      // Cmd+N: open a new window of the same type as the current window
       if (e.metaKey && e.key === 'n' && !e.shiftKey && !e.altKey && !e.ctrlKey) {
         if (state.settings.windowMode || state.isTerminalMode) {
           e.preventDefault()
-          window.api.newWindow()
+          window.api.newWindow({ terminalMode: state.isTerminalMode })
           return
         }
       }

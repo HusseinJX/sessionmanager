@@ -58,7 +58,10 @@ interface AppState {
   expandedSessionId: string | null
   layoutMode: 'auto' | '1' | '2' | '3'
   projectViewMode: Record<string, 'terminals' | 'planner'>
+  plannerSessionFilter: Record<string, string | null>
+  sessionQueueRunning: Record<string, boolean>
   projectTasks: Record<string, TaskItem[]>
+  sessionNotesEditor: { projectId: string; sessionId: string } | null
 
   // Actions — connection
   setConfig: (config: ServerConfig | null) => void
@@ -81,6 +84,14 @@ interface AppState {
   setLayoutMode: (mode: 'auto' | '1' | '2' | '3') => void
   setProjectViewMode: (projectId: string, mode: 'terminals' | 'planner') => void
   getProjectViewMode: (projectId: string) => 'terminals' | 'planner'
+  setPlannerSessionFilter: (projectId: string, sessionId: string | null) => void
+  getPlannerSessionFilter: (projectId: string) => string | null
+  setSessionQueueRunning: (sessionId: string, running: boolean) => void
+  isSessionQueueRunning: (sessionId: string) => boolean
+  updateSessionNotes: (projectId: string, sessionId: string, notes: string) => void
+  removeSessionFromProject: (projectId: string, sessionId: string) => void
+  openSessionNotesEditor: (projectId: string, sessionId: string) => void
+  closeSessionNotesEditor: () => void
 
   // Actions — tasks
   setProjectTasks: (projectId: string, tasks: TaskItem[]) => void
@@ -121,7 +132,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   expandedSessionId: null,
   layoutMode: 'auto',
   projectViewMode: {},
+  plannerSessionFilter: {},
+  sessionQueueRunning: {},
   projectTasks: {},
+  sessionNotesEditor: null,
 
   setConfig: (config) => {
     if (config) {
@@ -311,6 +325,46 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
 
   getProjectViewMode: (projectId) => get().projectViewMode[projectId] ?? 'terminals',
+
+  setPlannerSessionFilter: (projectId, sessionId) =>
+    set((state) => ({
+      plannerSessionFilter: { ...state.plannerSessionFilter, [projectId]: sessionId },
+    })),
+
+  getPlannerSessionFilter: (projectId) => get().plannerSessionFilter[projectId] ?? null,
+
+  setSessionQueueRunning: (sessionId, running) =>
+    set((state) => ({ sessionQueueRunning: { ...state.sessionQueueRunning, [sessionId]: running } })),
+
+  isSessionQueueRunning: (sessionId) => get().sessionQueueRunning[sessionId] ?? false,
+
+  updateSessionNotes: (projectId, sessionId, notes) =>
+    set((state) => ({
+      projects: state.projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              sessions: project.sessions.map((session) =>
+                session.id === sessionId ? { ...session, notes } : session
+              ),
+            }
+          : project
+      ),
+    })),
+
+  openSessionNotesEditor: (projectId, sessionId) =>
+    set({ sessionNotesEditor: { projectId, sessionId } }),
+
+  closeSessionNotesEditor: () => set({ sessionNotesEditor: null }),
+
+  removeSessionFromProject: (projectId, sessionId) =>
+    set((state) => ({
+      projects: state.projects.map((project) =>
+        project.id === projectId
+          ? { ...project, sessions: project.sessions.filter((s) => s.id !== sessionId) }
+          : project
+      ),
+    })),
 
   // Task actions
   setProjectTasks: (projectId, tasks) =>

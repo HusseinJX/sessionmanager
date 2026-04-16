@@ -80,6 +80,9 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
     setExpandedSession, sessionStates, projects,
     markSessionViewed, initSessionState,
     addSessionToProject, removeSessionFromProject,
+    setActiveProject, setProjectViewMode, setPlannerSessionFilter, openSessionNotesEditor,
+    updateTaskInProject,
+    sessionQueueRunning, setSessionQueueRunning
   } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
@@ -110,7 +113,7 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
 
   const handleSendCommand = useCallback((): void => {
     if (!cmdInput) return
-    window.api.sendInput(activeSessionId, cmdInput + '\r')
+    window.api.submitCommand(activeSessionId, cmdInput)
     setCmdInput('')
     terminalRef.current?.focus()
   }, [cmdInput, activeSessionId])
@@ -124,6 +127,48 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
     setActiveSessionId(id)
     setCmdInput('')
   }
+
+  const handleOpenPlanner = useCallback((): void => {
+    if (!ownerProject) return
+    setActiveProject(ownerProject.id)
+    setPlannerSessionFilter(ownerProject.id, activeSessionId)
+    setProjectViewMode(ownerProject.id, 'planner')
+    setExpandedSession(null)
+  }, [ownerProject, activeSessionId, setActiveProject, setPlannerSessionFilter, setProjectViewMode, setExpandedSession])
+
+  const handleOpenNotes = useCallback((): void => {
+    if (!ownerProject) return
+    openSessionNotesEditor(ownerProject.id, activeSessionId)
+  }, [ownerProject, activeSessionId, openSessionNotesEditor])
+
+  const ownerTasks = ownerProject?.tasks ?? []
+  const activeAssignedBacklog = ownerTasks
+    .filter((t) => t.status === 'backlog' && t.assignedSessionId === activeSessionId)
+    .sort((a, b) => a.order - b.order)
+  const nextActiveTask = activeAssignedBacklog[0]
+  const activeQueueCount = activeAssignedBacklog.length
+  const activeQueueRunning = sessionQueueRunning[activeSessionId] ?? false
+
+  const handlePlayNext = useCallback((): void => {
+    if (!ownerProject) return
+    if (activeQueueRunning) {
+      setSessionQueueRunning(activeSessionId, false)
+      return
+    }
+    setSessionQueueRunning(activeSessionId, true)
+    const inProgress = ownerTasks.find(
+      (t) => t.assignedSessionId === activeSessionId && t.status === 'in-progress'
+    )
+    if (inProgress) return
+    if (!nextActiveTask) {
+      setSessionQueueRunning(activeSessionId, false)
+      return
+    }
+    void window.api.submitCommand(activeSessionId, nextActiveTask.title)
+    const updates = { status: 'in-progress' as const, assignedSessionId: activeSessionId }
+    updateTaskInProject(ownerProject.id, nextActiveTask.id, updates)
+    void window.api.updateTask(ownerProject.id, nextActiveTask.id, updates)
+  }, [nextActiveTask, ownerProject, activeSessionId, updateTaskInProject, activeQueueRunning, setSessionQueueRunning, ownerTasks])
 
   const handleAddRunner = (): void => {
     if (!ownerProject) return
@@ -398,6 +443,8 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
   const displayCwd = activeCwd
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
+  const activeSessionConfig = ownerProject?.sessions.find((s) => s.id === activeSessionId)
+  const activeHasNotes = Boolean(activeSessionConfig?.notes?.trim())
 
   // Sidebar label helpers
   const primaryLiveCwd = sessionStates[sessionId]?.currentCwd ?? primaryConfig?.cwd ?? ''
@@ -422,8 +469,45 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
               ← Back
             </button>
             <div className="h-4 w-px bg-border-subtle" />
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-text-primary">{displayName}</span>
+            <div className="flex flex-col min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-medium text-text-primary truncate">{displayName}</span>
+                <button
+                  className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"
+                  onClick={handleOpenPlanner}
+                  title="Open planner filtered to this terminal"
+                >
+                  plan
+                </button>
+                <button
+                  className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 ${
+                    activeHasNotes
+                      ? 'text-accent-blue border-accent-blue/40 hover:text-text-primary'
+                      : 'text-text-muted border-border-subtle hover:text-text-primary'
+                  }`}
+                  onClick={handleOpenNotes}
+                  title="View or edit terminal notes"
+                >
+                  notes
+                </button>
+                {(activeQueueCount > 0 || activeQueueRunning) && (
+                  <button
+                    className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 hover:text-text-primary ${
+                      activeQueueRunning
+                        ? 'text-yellow-400 border-yellow-400/40 animate-pulse'
+                        : 'text-accent-green border-accent-green/40'
+                    }`}
+                    onClick={handlePlayNext}
+                    title={
+                      activeQueueRunning
+                        ? `Auto-advancing task queue — click to stop (${activeQueueCount} remaining)`
+                        : `Start auto-advance: send "${nextActiveTask?.title}" and continue through backlog (${activeQueueCount} queued)`
+                    }
+                  >
+                    {activeQueueRunning ? `⏸ ${activeQueueCount}` : `▶ ${activeQueueCount}`}
+                  </button>
+                )}
+              </div>
               <span className="text-xs text-text-muted font-mono">{displayCwd}</span>
             </div>
           </div>

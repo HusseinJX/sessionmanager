@@ -117,6 +117,28 @@ export async function deleteSession(
   )
 }
 
+export async function updateSessionNotesApi(
+  config: ServerConfig,
+  projectId: string,
+  sessionId: string,
+  notes: string
+): Promise<SessionStatus> {
+  const res = await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}` +
+      `/sessions/${encodeURIComponent(sessionId)}/notes`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ notes }),
+    }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<SessionStatus>
+}
+
 export async function sendInput(
   config: ServerConfig,
   sessionId: string,

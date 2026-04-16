@@ -395,6 +395,28 @@ export class SessionManager extends EventEmitter {
     return true
   }
 
+  // Submit a command: write the text, then send \r in a separate PTY write
+  // after a short delay. TUIs like Claude Code/Ink detect paste when a large
+  // chunk arrives in one read() and treat a trailing \r as a literal newline
+  // inside the pasted content instead of a submit. Splitting the writes makes
+  // the \r land in a subsequent read() so it's interpreted as Enter.
+  submitCommand(id: string, text: string): boolean {
+    const session = this.sessions.get(id)
+    if (!session) return false
+    session.pty.write(text)
+    session.hadInput = true
+    session.activityBytes = 0
+    if (session.inputWaiting) {
+      session.inputWaiting = false
+      this.broadcast('terminal:input-resolved', { id })
+    }
+    setTimeout(() => {
+      const live = this.sessions.get(id)
+      if (live) live.pty.write('\r')
+    }, 40)
+    return true
+  }
+
   resizeSession(id: string, cols: number, rows: number): void {
     const session = this.sessions.get(id)
     if (!session || session.meta.status === 'exited') return

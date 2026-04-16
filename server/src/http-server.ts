@@ -3,7 +3,7 @@ import * as https from 'https'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes } from './store'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -41,7 +41,7 @@ export class HttpApiServer {
   private port: number
   private tlsOptions: TlsOptions
   private rateLimitMap = new Map<string, RateLimitEntry>()
-  private readonly RATE_LIMIT = 60        // requests per window
+  private readonly RATE_LIMIT = 600       // requests per window
   private readonly RATE_WINDOW_MS = 60000 // 1 minute
 
   constructor(sessionManager: SessionManager, port: number, token: string, tlsOptions: TlsOptions) {
@@ -115,6 +115,8 @@ export class HttpApiServer {
 
   private isRateLimited(req: http.IncomingMessage): boolean {
     const ip = this.getClientIp(req)
+    // Skip rate limiting for loopback (no proxy/domain — all traffic shares one IP)
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return false
     const now = Date.now()
     const entry = this.rateLimitMap.get(ip)
 
@@ -141,7 +143,7 @@ export class HttpApiServer {
       res.setHeader('Access-Control-Allow-Origin', origin)
       res.setHeader('Vary', 'Origin')
     }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
   }
 
@@ -278,6 +280,22 @@ export class HttpApiServer {
       return
     }
 
+    const sessionNotesMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/notes$/)
+    if (req.method === 'PUT' && sessionNotesMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const { notes } = JSON.parse(body) as { notes?: string }
+          if (typeof notes !== 'string') return this.json(res, 400, { error: 'notes must be a string' })
+          const session = updateSessionNotes(sessionNotesMatch[1], sessionNotesMatch[2], notes)
+          if (!session) return this.json(res, 404, { error: 'Session not found' })
+          this.json(res, 200, session)
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
     // GET /api/events (SSE)
     if (req.method === 'GET' && urlPath === '/api/events') {
       this.handleSse(req, res)
@@ -306,7 +324,7 @@ export class HttpApiServer {
           if (!command || typeof command !== 'string') {
             return this.json(res, 400, { error: 'Body must contain a "command" string' })
           }
-          const ok = this.sessionManager.writeToSession(cmdMatch[1], command + '\r')
+          const ok = this.sessionManager.submitCommand(cmdMatch[1], command)
           if (!ok) return this.json(res, 404, { error: 'Session not found' })
           this.json(res, 200, { ok: true, sessionId: cmdMatch[1], command })
         } catch {

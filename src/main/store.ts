@@ -1,7 +1,7 @@
 import ElectronStore from 'electron-store'
 import { v4 as uuidv4 } from 'uuid'
 
-export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'done'
+export type TaskStatus = 'backlog' | 'in-progress' | 'done'
 
 export interface TaskItem {
   id: string
@@ -16,12 +16,20 @@ export interface TaskItem {
   completedAt?: number
 }
 
+export interface SessionGroup {
+  id: string
+  name: string
+  color: string
+}
+
 export interface SessionConfig {
   id: string
   name: string
   cwd: string
   command?: string
   parentSessionId?: string
+  notes?: string
+  groupId?: string
   aiConfig?: {
     enabled: boolean
     rules: string[]
@@ -34,6 +42,7 @@ export interface ProjectConfig {
   sessions: SessionConfig[]
   tasks: TaskItem[]
   notes?: string
+  groups?: SessionGroup[]
 }
 
 export interface AppSettings {
@@ -71,9 +80,25 @@ const schema = {
               id: { type: 'string' },
               name: { type: 'string' },
               cwd: { type: 'string' },
-              command: { type: 'string' }
+              command: { type: 'string' },
+              parentSessionId: { type: 'string' },
+              notes: { type: 'string' },
+              groupId: { type: 'string' }
             },
             required: ['id', 'name', 'cwd']
+          }
+        },
+        groups: {
+          type: 'array',
+          default: [],
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              name: { type: 'string' },
+              color: { type: 'string' }
+            },
+            required: ['id', 'name', 'color']
           }
         },
         tasks: {
@@ -215,6 +240,16 @@ export function updateSessionCwd(sessionId: string, cwd: string): void {
   }
 }
 
+export function updateSessionNotes(projectId: string, sessionId: string, notes: string): SessionConfig | null {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  const session = project?.sessions.find((s) => s.id === sessionId)
+  if (!session) return null
+  session.notes = notes
+  setProjects(projects)
+  return session
+}
+
 export function removeSession(projectId: string, sessionId: string): void {
   const projects = getProjects()
   const project = projects.find((p) => p.id === projectId)
@@ -294,9 +329,89 @@ export function getNextTodoTask(projectId: string): TaskItem | null {
   const tasks = getTasksForProject(projectId)
   return (
     tasks
-      .filter((t) => t.status === 'todo')
+      .filter((t) => t.status === 'backlog')
       .sort((a, b) => a.order - b.order)[0] ?? null
   )
+}
+
+// --- Session Group CRUD ---
+
+export function addSessionGroup(projectId: string, group: SessionGroup): void {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  if (!project) return
+  if (!project.groups) project.groups = []
+  project.groups.push(group)
+  setProjects(projects)
+}
+
+export function removeSessionGroup(projectId: string, groupId: string): void {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  if (!project) return
+  project.groups = (project.groups ?? []).filter((g) => g.id !== groupId)
+  // Unassign sessions that were in this group
+  for (const s of project.sessions) {
+    if (s.groupId === groupId) delete s.groupId
+  }
+  setProjects(projects)
+}
+
+export function updateSessionGroup(
+  projectId: string,
+  groupId: string,
+  updates: Partial<Pick<SessionGroup, 'name' | 'color'>>
+): void {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  if (!project) return
+  const group = (project.groups ?? []).find((g) => g.id === groupId)
+  if (group) Object.assign(group, updates)
+  setProjects(projects)
+}
+
+export function setSessionGroupId(
+  projectId: string,
+  sessionId: string,
+  groupId: string | null
+): void {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  if (!project) return
+  const session = project.sessions.find((s) => s.id === sessionId)
+  if (!session) return
+  if (groupId) session.groupId = groupId
+  else delete session.groupId
+  setProjects(projects)
+}
+
+export function reorderProjectSessions(projectId: string, sessionIds: string[]): void {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  if (!project) return
+  const map = new Map(project.sessions.map((s) => [s.id, s]))
+  const reordered = sessionIds.map((id) => map.get(id)).filter(Boolean) as SessionConfig[]
+  // Append any sessions not in the provided list (safety net)
+  const reorderedSet = new Set(sessionIds)
+  for (const s of project.sessions) {
+    if (!reorderedSet.has(s.id)) reordered.push(s)
+  }
+  project.sessions = reordered
+  setProjects(projects)
+}
+
+export function reorderProjectGroups(projectId: string, groupIds: string[]): void {
+  const projects = getProjects()
+  const project = projects.find((p) => p.id === projectId)
+  if (!project || !project.groups) return
+  const map = new Map(project.groups.map((g) => [g.id, g]))
+  const reordered = groupIds.map((id) => map.get(id)).filter(Boolean) as SessionGroup[]
+  const reorderedSet = new Set(groupIds)
+  for (const g of project.groups) {
+    if (!reorderedSet.has(g.id)) reordered.push(g)
+  }
+  project.groups = reordered
+  setProjects(projects)
 }
 
 export function getFullState(): StoreSchema {

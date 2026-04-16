@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '../store'
-import { sendInput, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects } from '../api'
+import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, updateTaskApi } from '../api'
 
 function SidebarItem({
   label,
@@ -208,6 +208,14 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     projects,
     config,
     setProjects,
+    setActiveProject,
+    setProjectViewMode,
+    setPlannerSessionFilter,
+    openSessionNotesEditor,
+    projectTasks,
+    updateTaskInProject,
+    sessionQueueRunning,
+    setSessionQueueRunning,
   } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
@@ -236,6 +244,50 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     setActiveSessionId(id)
     setSidebarOpen(false)
   }
+
+  const handleOpenPlanner = useCallback(() => {
+    if (!ownerProject) return
+    setActiveProject(ownerProject.id)
+    setPlannerSessionFilter(ownerProject.id, activeSessionId)
+    setProjectViewMode(ownerProject.id, 'planner')
+    setExpandedSession(null)
+  }, [ownerProject, activeSessionId, setActiveProject, setPlannerSessionFilter, setProjectViewMode, setExpandedSession])
+
+  const handleOpenNotes = useCallback(() => {
+    if (!ownerProject) return
+    openSessionNotesEditor(ownerProject.id, activeSessionId)
+  }, [ownerProject, activeSessionId, openSessionNotesEditor])
+
+  const activeAssignedBacklog = ownerProject
+    ? (projectTasks[ownerProject.id] ?? [])
+        .filter((t) => t.status === 'backlog' && t.assignedSessionId === activeSessionId)
+        .sort((a, b) => a.order - b.order)
+    : []
+  const nextActiveTask = activeAssignedBacklog[0]
+  const activeQueueCount = activeAssignedBacklog.length
+  const activeQueueRunning = sessionQueueRunning[activeSessionId] ?? false
+
+  const handlePlayNext = useCallback(() => {
+    if (!config || !ownerProject) return
+    if (activeQueueRunning) {
+      setSessionQueueRunning(activeSessionId, false)
+      return
+    }
+    setSessionQueueRunning(activeSessionId, true)
+    const tasks = projectTasks[ownerProject.id] ?? []
+    const inProgress = tasks.find(
+      (t) => t.assignedSessionId === activeSessionId && t.status === 'in-progress'
+    )
+    if (inProgress) return
+    if (!nextActiveTask) {
+      setSessionQueueRunning(activeSessionId, false)
+      return
+    }
+    sendCommand(config, activeSessionId, nextActiveTask.title).catch(() => {})
+    const updates = { status: 'in-progress' as const, assignedSessionId: activeSessionId }
+    updateTaskInProject(ownerProject.id, nextActiveTask.id, updates)
+    updateTaskApi(config, ownerProject.id, nextActiveTask.id, updates).catch(() => {})
+  }, [nextActiveTask, config, ownerProject, activeSessionId, updateTaskInProject, activeQueueRunning, setSessionQueueRunning, projectTasks])
 
   const handleAddRunner = async () => {
     if (!ownerProject || !config) return
@@ -321,7 +373,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     isLoadedRef.current = true
 
     const term = new Terminal({
-      scrollback: 5000,
+      scrollback: 20000,
       cursorBlink: true,
       convertEol: true,
       fontFamily: '"Menlo", "Monaco", "Courier New", monospace',
@@ -460,6 +512,8 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   const displayCwd = activeCwd
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
+  const activeSessionConfig = ownerProject?.sessions.find((s) => s.id === activeSessionId)
+  const activeHasNotes = Boolean(activeSessionConfig?.notes?.trim())
 
   const primaryLiveCwd = sessionStates[sessionId]?.currentCwd ?? primarySession?.cwd ?? ''
   const primaryLabel = primaryLiveCwd.split('/').filter(Boolean).pop() ?? primarySession?.name ?? 'Terminal'
@@ -481,7 +535,44 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
             </button>
             <div className="h-4 w-px bg-border-subtle flex-shrink-0" />
             <div className="flex flex-col min-w-0">
-              <span className="text-sm font-medium text-text-primary truncate">{displayName}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-sm font-medium text-text-primary truncate">{displayName}</span>
+                <button
+                  className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"
+                  onClick={handleOpenPlanner}
+                  title="Open planner filtered to this terminal"
+                >
+                  plan
+                </button>
+                <button
+                  className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 ${
+                    activeHasNotes
+                      ? 'text-accent-blue border-accent-blue/40 hover:text-text-primary'
+                      : 'text-text-muted border-border-subtle hover:text-text-primary'
+                  }`}
+                  onClick={handleOpenNotes}
+                  title="View or edit terminal notes"
+                >
+                  notes
+                </button>
+                {(activeQueueCount > 0 || activeQueueRunning) && (
+                  <button
+                    className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 hover:text-text-primary ${
+                      activeQueueRunning
+                        ? 'text-yellow-400 border-yellow-400/40 animate-pulse'
+                        : 'text-accent-green border-accent-green/40'
+                    }`}
+                    onClick={handlePlayNext}
+                    title={
+                      activeQueueRunning
+                        ? `Auto-advancing task queue — click to stop (${activeQueueCount} remaining)`
+                        : `Start auto-advance: send "${nextActiveTask?.title}" and continue through backlog (${activeQueueCount} queued)`
+                    }
+                  >
+                    {activeQueueRunning ? `⏸ ${activeQueueCount}` : `▶ ${activeQueueCount}`}
+                  </button>
+                )}
+              </div>
               <span className="text-xs text-text-muted font-mono truncate">{displayCwd}</span>
             </div>
           </div>

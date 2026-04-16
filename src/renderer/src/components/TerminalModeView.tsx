@@ -1,10 +1,32 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { CanvasAddon } from '@xterm/addon-canvas'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { useAppStore, SessionConfig, SessionRuntimeState } from '../store'
+import { useAppStore, SessionConfig, SessionRuntimeState, SessionGroup } from '../store'
 import '@xterm/xterm/css/xterm.css'
+
+// ── Group color palette ────────────────────────────────────────────────────────
+
+const GROUP_COLORS = [
+  '#ef4444', '#f97316', '#eab308', '#22c55e',
+  '#3b82f6', '#a855f7', '#ec4899', '#06b6d4',
+]
+
+// ── Drag types ────────────────────────────────────────────────────────────────
+
+type DragItem =
+  | { kind: 'tab'; sessionId: string }
+  | { kind: 'group'; groupId: string }
+
+type DropTarget =
+  | { kind: 'tab'; sessionId: string; side: 'before' | 'after' }
+  | { kind: 'group'; groupId: string; side: 'before' | 'after' | 'into' }
+
+// ── Drag context (module-level so it survives renders without causing rerenders) ──
+
+let dragItem: DragItem | null = null
 
 // ── Inline xterm pane — remounts when sessionId changes via key prop ──────────
 
@@ -325,50 +347,427 @@ function EditableNotes({
   )
 }
 
-// ── Tab ────────────────────────────────────────────────────────────────────────
+// ── Color picker popover ───────────────────────────────────────────────────────
 
-function Tab({
-  session,
-  isActive,
-  runtimeState,
-  onClick,
+function ColorPicker({
+  value,
+  onChange,
   onClose,
 }: {
-  session: SessionConfig
-  isActive: boolean
-  runtimeState: SessionRuntimeState | undefined
-  onClick: () => void
-  onClose: (e: React.MouseEvent) => void
+  value: string
+  onChange: (c: string) => void
+  onClose: () => void
 }): React.ReactElement {
-  const status = runtimeState?.status ?? 'running'
-  const inputWaiting = runtimeState?.inputWaiting ?? false
-  const dotColor = inputWaiting
-    ? 'bg-accent-red animate-ping'
-    : status === 'exited'
-      ? 'bg-accent-red'
-      : 'bg-accent-green animate-pulse'
+  return (
+    <div
+      className="absolute top-full left-0 mt-1 z-50 bg-bg-card border border-border-subtle rounded-lg p-2 flex gap-1.5 flex-wrap w-[116px] shadow-xl"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {GROUP_COLORS.map((c) => (
+        <button
+          key={c}
+          className={`w-6 h-6 rounded-full transition-transform hover:scale-110 ${value === c ? 'ring-2 ring-offset-1 ring-offset-bg-card ring-white' : ''}`}
+          style={{ background: c }}
+          onClick={(e) => { e.stopPropagation(); onChange(c); onClose() }}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ── DraggableTabBar ────────────────────────────────────────────────────────────
+
+interface TabBarProps {
+  sessions: SessionConfig[]        // all top-level sessions (no parentSessionId)
+  groups: SessionGroup[]
+  activeId: string | null
+  sessionStates: Record<string, SessionRuntimeState>
+  projectId: string
+  onSelect: (id: string) => void
+  onClose: (e: React.MouseEvent, id: string) => void
+  onAdd: () => void
+  onAddGroup: () => void
+  onGroupRename: (groupId: string, name: string) => void
+  onGroupColorChange: (groupId: string, color: string) => void
+  onGroupDelete: (groupId: string) => void
+  onReorder: (sessionIds: string[]) => void
+  onGroupReorder: (groupIds: string[]) => void
+  onSetSessionGroup: (sessionId: string, groupId: string | null) => void
+}
+
+function DraggableTabBar({
+  sessions,
+  groups,
+  activeId,
+  sessionStates,
+  projectId: _projectId,
+  onSelect,
+  onClose,
+  onAdd,
+  onAddGroup,
+  onGroupRename,
+  onGroupColorChange,
+  onGroupDelete,
+  onReorder,
+  onGroupReorder,
+  onSetSessionGroup,
+}: TabBarProps): React.ReactElement {
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [colorPickerGroupId, setColorPickerGroupId] = useState<string | null>(null)
+
+  // Build ordered flat item list: ungrouped tabs, then each group + its tabs
+  const ungrouped = sessions.filter((s) => !s.groupId)
+  // grouped sessions in array order
+  const groupedSessions = (groupId: string) => sessions.filter((s) => s.groupId === groupId)
+
+  // ── helpers ────────────────────────────────────────────────────────────────
+
+  function applyDrop(target: DropTarget, dragged: DragItem): void {
+    if (dragged.kind === 'tab') {
+      const sessionId = dragged.sessionId
+
+      if (target.kind === 'group' && target.side === 'into') {
+        // Assign to group
+        onSetSessionGroup(sessionId, target.groupId)
+        return
+      }
+
+      if (target.kind === 'group') {
+        // Drop before/after a group header → ungrouped, position around the group
+        const newIds = [...sessions.map((s) => s.id)]
+        const fromIdx = newIds.indexOf(sessionId)
+        if (fromIdx !== -1) newIds.splice(fromIdx, 1)
+
+        // Find position: before group = before first session of group (or insert at position of group in the list)
+        // We compute the final ordered array: ungrouped, then groups
+        const orderedIds = buildOrderedSessionIds(
+          sessions.filter((s) => s.id !== sessionId),
+          groups
+        )
+        const groupSessions = groupedSessions(target.groupId).map((s) => s.id)
+
+        let insertIdx: number
+        if (target.side === 'before') {
+          // Before the group's first session (or first ungrouped after ungrouped batch)
+          insertIdx = groupSessions.length > 0
+            ? orderedIds.indexOf(groupSessions[0])
+            : orderedIds.length
+        } else {
+          // After the group's last session
+          insertIdx = groupSessions.length > 0
+            ? orderedIds.indexOf(groupSessions[groupSessions.length - 1]) + 1
+            : orderedIds.length
+        }
+        orderedIds.splice(insertIdx, 0, sessionId)
+        // Remove from group if it was in one
+        onSetSessionGroup(sessionId, null)
+        onReorder(orderedIds)
+        return
+      }
+
+      // Drop before/after a tab
+      if (target.kind === 'tab') {
+        const targetSession = sessions.find((s) => s.id === target.sessionId)
+        if (!targetSession) return
+
+        const newGroupId = targetSession.groupId ?? null
+
+        // Build ordered list without the dragged item
+        const ordered = buildOrderedSessionIds(
+          sessions.filter((s) => s.id !== sessionId),
+          groups
+        )
+        const targetIdx = ordered.indexOf(target.sessionId)
+        const insertIdx = target.side === 'before' ? targetIdx : targetIdx + 1
+        ordered.splice(insertIdx, 0, sessionId)
+
+        // Assign to same group as target
+        onSetSessionGroup(sessionId, newGroupId)
+        onReorder(ordered)
+      }
+    }
+
+    if (dragged.kind === 'group') {
+      if (target.kind !== 'group') return
+      const newOrder = groups.map((g) => g.id).filter((id) => id !== dragged.groupId)
+      const targetIdx = newOrder.indexOf(target.groupId)
+      const insertIdx = target.side === 'before' || target.side === 'into' ? targetIdx : targetIdx + 1
+      newOrder.splice(insertIdx, 0, dragged.groupId)
+      onGroupReorder(newOrder)
+    }
+  }
+
+  function buildOrderedSessionIds(slist: SessionConfig[], glist: SessionGroup[]): string[] {
+    const result: string[] = []
+    for (const s of slist) {
+      if (!s.groupId) result.push(s.id)
+    }
+    for (const g of glist) {
+      for (const s of slist) {
+        if (s.groupId === g.id) result.push(s.id)
+      }
+    }
+    return result
+  }
+
+  function getDragSide(e: React.DragEvent, el: HTMLElement): 'before' | 'after' {
+    const rect = el.getBoundingClientRect()
+    return e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+  }
+
+  function handleDragOver(e: React.DragEvent, target: DropTarget): void {
+    if (!dragItem) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDropTarget(target)
+  }
+
+  function handleDrop(e: React.DragEvent, target: DropTarget): void {
+    e.preventDefault()
+    if (dragItem) applyDrop(target, dragItem)
+    dragItem = null
+    setDropTarget(null)
+  }
+
+  function handleDragEnd(): void {
+    dragItem = null
+    setDropTarget(null)
+  }
+
+  // ── rendering helpers ──────────────────────────────────────────────────────
+
+  function statusDot(sessionId: string): string {
+    const rs = sessionStates[sessionId]
+    if (rs?.inputWaiting) return 'bg-accent-red animate-ping'
+    if (rs?.status === 'exited') return 'bg-accent-red'
+    return 'bg-accent-green animate-pulse'
+  }
+
+  function isDropBefore(kind: 'tab' | 'group', id: string): boolean {
+    if (!dropTarget) return false
+    if (dropTarget.kind !== kind) return false
+    if (dropTarget.kind === 'tab' && kind === 'tab') {
+      return (dropTarget as { kind: 'tab'; sessionId: string; side: string }).sessionId === id &&
+        dropTarget.side === 'before'
+    }
+    if (dropTarget.kind === 'group' && kind === 'group') {
+      return (dropTarget as { kind: 'group'; groupId: string; side: string }).groupId === id &&
+        dropTarget.side === 'before'
+    }
+    return false
+  }
+
+  function isDropAfter(kind: 'tab' | 'group', id: string): boolean {
+    if (!dropTarget) return false
+    if (dropTarget.kind !== kind) return false
+    if (dropTarget.kind === 'tab' && kind === 'tab') {
+      return (dropTarget as { kind: 'tab'; sessionId: string; side: string }).sessionId === id &&
+        dropTarget.side === 'after'
+    }
+    if (dropTarget.kind === 'group' && kind === 'group') {
+      return (dropTarget as { kind: 'group'; groupId: string; side: string }).groupId === id &&
+        (dropTarget.side === 'after' || dropTarget.side === 'into')
+    }
+    return false
+  }
+
+  const INSERT_LINE = (
+    <div className="w-0.5 h-5 bg-accent-blue rounded-full flex-shrink-0 self-center" />
+  )
+
+  function renderTab(session: SessionConfig): React.ReactElement {
+    const isActive = session.id === activeId
+    const group = groups.find((g) => g.id === session.groupId)
+    const isDragging = dragItem?.kind === 'tab' && dragItem.sessionId === session.id
+
+    return (
+      <React.Fragment key={session.id}>
+        {isDropBefore('tab', session.id) && INSERT_LINE}
+        <button
+          draggable
+          onDragStart={(e) => {
+            dragItem = { kind: 'tab', sessionId: session.id }
+            e.dataTransfer.effectAllowed = 'move'
+          }}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => {
+            const side = getDragSide(e, e.currentTarget as HTMLElement)
+            handleDragOver(e, { kind: 'tab', sessionId: session.id, side })
+          }}
+          onDrop={(e) => {
+            const side = getDragSide(e, e.currentTarget as HTMLElement)
+            handleDrop(e, { kind: 'tab', sessionId: session.id, side })
+          }}
+          onClick={() => onSelect(session.id)}
+          style={group ? { borderTopColor: group.color } : undefined}
+          className={`
+            group/tab flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-t-lg transition-all
+            relative flex-shrink-0 min-w-0 max-w-[180px] cursor-grab active:cursor-grabbing select-none
+            ${isDragging ? 'opacity-40' : ''}
+            ${isActive
+              ? 'bg-[#0d1117] text-text-primary border-t-2 border-l border-r border-border-subtle -mb-px z-10'
+              : 'text-text-muted hover:text-text-primary bg-bg-card/60 border border-transparent hover:bg-bg-overlay'
+            }
+          `}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusDot(session.id)}`} />
+          <span className="truncate text-xs font-medium">{session.name}</span>
+          <span
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => onClose(e, session.id)}
+            className="opacity-0 group-hover/tab:opacity-100 text-text-muted hover:text-accent-red transition-opacity text-xs leading-none ml-0.5 flex-shrink-0 cursor-pointer px-0.5"
+            title="Close tab"
+          >
+            ×
+          </span>
+        </button>
+        {isDropAfter('tab', session.id) && INSERT_LINE}
+      </React.Fragment>
+    )
+  }
+
+  function renderGroup(group: SessionGroup): React.ReactElement {
+    const gSessions = groupedSessions(group.id)
+    const isColorPickerOpen = colorPickerGroupId === group.id
+    const isDragging = dragItem?.kind === 'group' && dragItem.groupId === group.id
+    const isDropInto = dropTarget?.kind === 'group' &&
+      (dropTarget as { groupId: string; side: string }).groupId === group.id &&
+      dropTarget.side === 'into'
+
+    return (
+      <React.Fragment key={group.id}>
+        {isDropBefore('group', group.id) && INSERT_LINE}
+
+        {/* Group header chip */}
+        <div
+          className={`
+            flex items-center gap-0.5 px-1 py-0.5 rounded-t-md self-end mb-0.5 flex-shrink-0 relative
+            select-none transition-all
+            ${isDragging ? 'opacity-40' : ''}
+            ${isDropInto ? 'ring-1 ring-offset-1 ring-offset-bg-base' : ''}
+          `}
+          style={{ borderTop: `2px solid ${group.color}`, background: `${group.color}18` }}
+          draggable
+          onDragStart={(e) => {
+            dragItem = { kind: 'group', groupId: group.id }
+            e.dataTransfer.effectAllowed = 'move'
+            e.stopPropagation()
+          }}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => {
+            e.preventDefault()
+            // If the cursor is over the header chip itself, treat as "into"
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            const side: DropTarget['side'] = dragItem?.kind === 'tab'
+              ? 'into'
+              : e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+            setDropTarget({ kind: 'group', groupId: group.id, side })
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            const side: DropTarget['side'] = dragItem?.kind === 'tab'
+              ? 'into'
+              : e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+            handleDrop(e, { kind: 'group', groupId: group.id, side })
+          }}
+        >
+          {/* Color dot */}
+          <div className="relative">
+            <button
+              className="w-2.5 h-2.5 rounded-full flex-shrink-0 hover:scale-125 transition-transform"
+              style={{ background: group.color }}
+              title="Change color"
+              onClick={(e) => {
+                e.stopPropagation()
+                setColorPickerGroupId(isColorPickerOpen ? null : group.id)
+              }}
+            />
+            {isColorPickerOpen && (
+              <ColorPicker
+                value={group.color}
+                onChange={(c) => onGroupColorChange(group.id, c)}
+                onClose={() => setColorPickerGroupId(null)}
+              />
+            )}
+          </div>
+
+          {/* Name */}
+          {renamingGroupId === group.id ? (
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={() => {
+                if (renameValue.trim()) onGroupRename(group.id, renameValue.trim())
+                setRenamingGroupId(null)
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') {
+                  if (renameValue.trim()) onGroupRename(group.id, renameValue.trim())
+                  setRenamingGroupId(null)
+                }
+                if (e.key === 'Escape') setRenamingGroupId(null)
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-transparent text-[10px] font-medium outline-none border-b border-white/40 min-w-[40px] max-w-[80px]"
+              style={{ color: group.color }}
+            />
+          ) : (
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider cursor-text px-0.5"
+              style={{ color: group.color }}
+              onDoubleClick={(e) => {
+                e.stopPropagation()
+                setRenamingGroupId(group.id)
+                setRenameValue(group.name)
+              }}
+              title="Double-click to rename"
+            >
+              {group.name}
+            </span>
+          )}
+
+          {/* Delete group */}
+          <button
+            className="opacity-0 hover:opacity-100 text-text-muted hover:text-accent-red text-xs leading-none px-0.5 transition-opacity"
+            onClick={(e) => { e.stopPropagation(); onGroupDelete(group.id) }}
+            title="Delete group"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Group's tabs */}
+        {gSessions.map(renderTab)}
+
+        {isDropAfter('group', group.id) && INSERT_LINE}
+      </React.Fragment>
+    )
+  }
+
+  // Close color picker when clicking outside
+  useEffect(() => {
+    if (!colorPickerGroupId) return
+    const handler = (): void => setColorPickerGroupId(null)
+    window.addEventListener('mousedown', handler)
+    return () => window.removeEventListener('mousedown', handler)
+  }, [colorPickerGroupId])
 
   return (
-    <button
-      onClick={onClick}
-      className={`
-        group/tab flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-t-lg transition-all relative flex-shrink-0 min-w-0 max-w-[180px]
-        ${isActive
-          ? 'bg-[#0d1117] text-text-primary border-t border-l border-r border-border-subtle -mb-px z-10'
-          : 'text-text-muted hover:text-text-primary bg-bg-card/60 border border-transparent hover:bg-bg-overlay'
-        }
-      `}
+    <div
+      className="flex items-end gap-0.5 overflow-x-auto min-w-0 shrink"
+      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTarget(null)
+      }}
     >
-      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
-      <span className="truncate text-xs font-medium">{session.name}</span>
-      <span
-        onClick={onClose}
-        className="opacity-0 group-hover/tab:opacity-100 text-text-muted hover:text-accent-red transition-opacity text-xs leading-none ml-0.5 flex-shrink-0 cursor-pointer px-0.5"
-        title="Close tab"
-      >
-        ×
-      </span>
-    </button>
+      {ungrouped.map(renderTab)}
+      {groups.map(renderGroup)}
+    </div>
   )
 }
 
@@ -386,6 +785,12 @@ export default function TerminalModeView(): React.ReactElement {
     removeSessionFromProject,
     initSessionState,
     updateSessionNotes,
+    addGroupToProject,
+    removeGroupFromProject,
+    updateGroupInProject,
+    setSessionGroupId: storeSetSessionGroup,
+    reorderSessionsInProject,
+    reorderGroupsInProject,
   } = useAppStore()
 
   // Capture the user's preferred window mode at mount time so we can restore it on exit
@@ -396,7 +801,7 @@ export default function TerminalModeView(): React.ReactElement {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.metaKey && e.key === 'n' && !e.shiftKey && !e.altKey && !e.ctrlKey) {
         e.preventDefault()
-        window.api.newWindow()
+        window.api.newWindow({ terminalMode: true })
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -419,6 +824,57 @@ export default function TerminalModeView(): React.ReactElement {
   const ownerProject = activeSession
     ? projects.find((p) => p.sessions.some((s) => s.id === resolvedId))
     : null
+
+  // Groups live on the first project (tabs are cross-project in terminal mode, use first project)
+  const primaryProject = ownerProject ?? projects[0] ?? null
+  const groups: SessionGroup[] = primaryProject?.groups ?? []
+
+  // ── Group handlers ──────────────────────────────────────────────────────────
+
+  const handleAddGroup = (): void => {
+    if (!primaryProject) return
+    const usedColors = new Set(groups.map((g) => g.color))
+    const color = GROUP_COLORS.find((c) => !usedColors.has(c)) ?? GROUP_COLORS[groups.length % GROUP_COLORS.length]
+    const group: SessionGroup = { id: uuidv4(), name: `Group ${groups.length + 1}`, color }
+    addGroupToProject(primaryProject.id, group)
+    window.api.addGroup(primaryProject.id, group).catch(() => {})
+  }
+
+  const handleGroupRename = (groupId: string, name: string): void => {
+    if (!primaryProject) return
+    updateGroupInProject(primaryProject.id, groupId, { name })
+    window.api.updateGroup(primaryProject.id, groupId, { name }).catch(() => {})
+  }
+
+  const handleGroupColorChange = (groupId: string, color: string): void => {
+    if (!primaryProject) return
+    updateGroupInProject(primaryProject.id, groupId, { color })
+    window.api.updateGroup(primaryProject.id, groupId, { color }).catch(() => {})
+  }
+
+  const handleGroupDelete = (groupId: string): void => {
+    if (!primaryProject) return
+    removeGroupFromProject(primaryProject.id, groupId)
+    window.api.removeGroup(primaryProject.id, groupId).catch(() => {})
+  }
+
+  const handleSetSessionGroup = (sessionId: string, groupId: string | null): void => {
+    if (!primaryProject) return
+    storeSetSessionGroup(primaryProject.id, sessionId, groupId)
+    window.api.setSessionGroup(primaryProject.id, sessionId, groupId).catch(() => {})
+  }
+
+  const handleReorderSessions = (sessionIds: string[]): void => {
+    if (!primaryProject) return
+    reorderSessionsInProject(primaryProject.id, sessionIds)
+    window.api.reorderSessions(primaryProject.id, sessionIds).catch(() => {})
+  }
+
+  const handleReorderGroups = (groupIds: string[]): void => {
+    if (!primaryProject) return
+    reorderGroupsInProject(primaryProject.id, groupIds)
+    window.api.reorderGroups(primaryProject.id, groupIds).catch(() => {})
+  }
 
   // Runners for active session
   const runners: SessionConfig[] = ownerProject
@@ -509,7 +965,7 @@ export default function TerminalModeView(): React.ReactElement {
 
   const handleSendCommand = (): void => {
     if (!cmdInput) return
-    window.api.sendInput(activeSubId, cmdInput + '\r')
+    window.api.submitCommand(activeSubId, cmdInput)
     setCmdInput('')
   }
 
@@ -535,29 +991,41 @@ export default function TerminalModeView(): React.ReactElement {
         className="flex items-end gap-0.5 pt-2 bg-bg-base border-b border-border-subtle flex-shrink-0"
         style={{ WebkitAppRegion: 'drag', paddingLeft: 80, paddingRight: 12 } as React.CSSProperties}
       >
-        <div
-          className="flex items-end gap-0.5 flex-1 overflow-x-auto min-w-0"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          {allSessions.map((session) => (
-            <Tab
-              key={session.id}
-              session={session}
-              isActive={session.id === resolvedId}
-              runtimeState={sessionStates[session.id]}
-              onClick={() => { setTerminalModeSession(session.id); setActiveSubId(session.id) }}
-              onClose={(e) => handleCloseTab(e, session.id)}
-            />
-          ))}
+        <DraggableTabBar
+          sessions={allSessions}
+          groups={groups}
+          activeId={resolvedId}
+          sessionStates={sessionStates}
+          projectId={primaryProject?.id ?? ''}
+          onSelect={(id) => { setTerminalModeSession(id); setActiveSubId(id) }}
+          onClose={handleCloseTab}
+          onAdd={handleAddTab}
+          onAddGroup={handleAddGroup}
+          onGroupRename={handleGroupRename}
+          onGroupColorChange={handleGroupColorChange}
+          onGroupDelete={handleGroupDelete}
+          onReorder={handleReorderSessions}
+          onGroupReorder={handleReorderGroups}
+          onSetSessionGroup={handleSetSessionGroup}
+        />
 
-          <button
-            onClick={handleAddTab}
-            className="flex-shrink-0 px-2.5 py-1.5 text-text-muted hover:text-text-primary text-sm rounded-t-lg hover:bg-bg-overlay transition-colors mb-0"
-            title="New tab"
-          >
-            +
-          </button>
-        </div>
+        <button
+          onClick={handleAddTab}
+          className="flex-shrink-0 px-2.5 py-1.5 text-text-muted hover:text-text-primary text-sm rounded-t-lg hover:bg-bg-overlay transition-colors mb-0 self-end"
+          title="New tab"
+        >
+          +
+        </button>
+        <button
+          onClick={handleAddGroup}
+          className="flex-shrink-0 px-2 py-1.5 text-text-muted hover:text-accent-blue text-xs rounded-t-lg hover:bg-bg-overlay transition-colors mb-0 self-end font-mono"
+          title="New group"
+        >
+          ⊞
+        </button>
+
+        {/* Draggable spacer — fills empty space between tabs and exit button */}
+        <div className="flex-1 self-stretch" />
 
         {/* Exit terminal mode */}
         <div

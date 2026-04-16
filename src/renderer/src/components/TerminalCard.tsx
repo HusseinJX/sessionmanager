@@ -2,6 +2,7 @@ import React, { useState, useRef, KeyboardEvent } from 'react'
 import { useAppStore, SessionConfig } from '../store'
 import TextPreview from './TextPreview'
 
+
 async function forkSession(
   session: SessionConfig,
   projectId: string
@@ -61,7 +62,18 @@ function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: b
 }
 
 export default function TerminalCard({ session, projectId, isFocused }: TerminalCardProps): React.ReactElement {
-  const { sessionStates, setExpandedSession, removeSessionFromProject } = useAppStore()
+  const {
+    sessionStates,
+    setExpandedSession,
+    removeSessionFromProject,
+    setProjectViewMode,
+    setPlannerSessionFilter,
+    openSessionNotesEditor,
+    projects,
+    updateTaskInProject,
+    sessionQueueRunning,
+    setSessionQueueRunning,
+  } = useAppStore()
 
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [cmdInput, setCmdInput] = useState('')
@@ -93,7 +105,7 @@ export default function TerminalCard({ session, projectId, isFocused }: Terminal
   const handleSend = (e?: React.MouseEvent): void => {
     e?.stopPropagation()
     if (!cmdInput) return
-    window.api.sendInput(session.id, cmdInput + '\r')
+    window.api.submitCommand(session.id, cmdInput)
     setCmdInput('')
     inputRef.current?.focus()
   }
@@ -107,6 +119,49 @@ export default function TerminalCard({ session, projectId, isFocused }: Terminal
   const cwdDisplay = liveCwd
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
+  const hasNotes = Boolean(session.notes?.trim())
+
+  const handleOpenPlanner = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    setPlannerSessionFilter(projectId, session.id)
+    setProjectViewMode(projectId, 'planner')
+  }
+
+  const handleOpenNotes = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    openSessionNotesEditor(projectId, session.id)
+  }
+
+  const project = projects.find((p) => p.id === projectId)
+  const projectTasks = project?.tasks ?? []
+  const assignedBacklog = projectTasks
+    .filter((t) => t.status === 'backlog' && t.assignedSessionId === session.id)
+    .sort((a, b) => a.order - b.order)
+  const queueCount = assignedBacklog.length
+  const nextTask = assignedBacklog[0]
+  const queueRunning = sessionQueueRunning[session.id] ?? false
+  const showQueueButton = queueCount > 0 || queueRunning
+
+  const handlePlayNext = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    if (queueRunning) {
+      setSessionQueueRunning(session.id, false)
+      return
+    }
+    setSessionQueueRunning(session.id, true)
+    const inProgress = projectTasks.find(
+      (t) => t.assignedSessionId === session.id && t.status === 'in-progress'
+    )
+    if (inProgress) return
+    if (!nextTask) {
+      setSessionQueueRunning(session.id, false)
+      return
+    }
+    void window.api.submitCommand(session.id, nextTask.title)
+    const updates = { status: 'in-progress' as const, assignedSessionId: session.id }
+    updateTaskInProject(projectId, nextTask.id, updates)
+    void window.api.updateTask(projectId, nextTask.id, updates)
+  }
 
   return (
     <div
@@ -133,6 +188,41 @@ export default function TerminalCard({ session, projectId, isFocused }: Terminal
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-medium text-text-primary truncate">{liveDisplayName}</span>
+          <button
+            className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"
+            title="Open planner filtered to this terminal"
+            onClick={handleOpenPlanner}
+          >
+            plan
+          </button>
+          <button
+            className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 ${
+              hasNotes
+                ? 'text-accent-blue border-accent-blue/40 hover:text-text-primary'
+                : 'text-text-muted border-border-subtle hover:text-text-primary'
+            }`}
+            title="View or edit terminal notes"
+            onClick={handleOpenNotes}
+          >
+            notes
+          </button>
+          {showQueueButton && (
+            <button
+              className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 transition-colors hover:text-text-primary ${
+                queueRunning
+                  ? 'text-yellow-400 border-yellow-400/40 animate-pulse'
+                  : 'text-accent-green border-accent-green/40'
+              }`}
+              title={
+                queueRunning
+                  ? `Auto-advancing task queue — click to stop (${queueCount} remaining)`
+                  : `Start auto-advance: send "${nextTask?.title}" and continue through backlog (${queueCount} queued)`
+              }
+              onClick={handlePlayNext}
+            >
+              {queueRunning ? `⏸ ${queueCount}` : `▶ ${queueCount}`}
+            </button>
+          )}
           {hasNewOutput && (
             <span className="w-1.5 h-1.5 rounded-full bg-accent-blue flex-shrink-0" title="New output" />
           )}
@@ -147,7 +237,7 @@ export default function TerminalCard({ session, projectId, isFocused }: Terminal
         <div className="flex items-center gap-2">
           <StatusBadge status={status} inputWaiting={inputWaiting} />
           <button
-            className={`text-xs opacity-0 group-hover:opacity-100 transition-all ${confirmDelete ? 'opacity-100 text-accent-red' : 'text-text-muted hover:text-accent-red'}`}
+            className={`text-xs transition-all ${confirmDelete ? 'text-accent-red' : 'text-text-muted hover:text-accent-red'}`}
             onClick={handleRemove}
             title={confirmDelete ? 'Click again to confirm' : 'Remove session'}
           >

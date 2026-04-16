@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 // Types
-export type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'done'
+export type TaskStatus = 'backlog' | 'in-progress' | 'done'
 
 export interface TaskItem {
   id: string
@@ -16,12 +16,20 @@ export interface TaskItem {
   completedAt?: number
 }
 
+export interface SessionGroup {
+  id: string
+  name: string
+  color: string
+}
+
 export interface SessionConfig {
   id: string
   name: string
   cwd: string
   command?: string
   parentSessionId?: string
+  notes?: string
+  groupId?: string
   aiConfig?: { enabled: boolean; rules: string[] }
 }
 
@@ -31,6 +39,7 @@ export interface Project {
   sessions: SessionConfig[]
   tasks: TaskItem[]
   notes?: string
+  groups?: SessionGroup[]
 }
 
 export interface SessionRuntimeState {
@@ -59,6 +68,11 @@ export interface AppSettings {
   keybindingOverrides: Record<string, string>
 }
 
+export interface SessionNotesEditorState {
+  projectId: string
+  sessionId: string
+}
+
 interface AppState {
   // Projects and session configs
   projects: Project[]
@@ -70,8 +84,14 @@ interface AppState {
   showAddSessionModal: boolean
   showAddProjectModal: boolean
   showConfigPanel: boolean
+  // Terminal mode
+  isTerminalMode: boolean
+  terminalModeSessionId: string | null
   // View mode per project: 'terminals' or 'planner'
   projectViewMode: Record<string, 'terminals' | 'planner'>
+  plannerSessionFilter: Record<string, string | null>
+  sessionQueueRunning: Record<string, boolean>
+  sessionNotesEditor: SessionNotesEditorState | null
   // Keyboard navigation
   focusedCardIndex: number | null
   // Settings
@@ -87,6 +107,7 @@ interface AppState {
   removeProject: (id: string) => void
   renameProject: (id: string, name: string) => void
   updateProjectNotes: (id: string, notes: string) => void
+  updateSessionNotes: (projectId: string, sessionId: string, notes: string) => void
   addSessionToProject: (projectId: string, session: SessionConfig) => void
   removeSessionFromProject: (projectId: string, sessionId: string) => void
   initSessionState: (sessionId: string, projectId: string) => void
@@ -102,6 +123,21 @@ interface AppState {
   // Task / Planner actions
   setProjectViewMode: (projectId: string, mode: 'terminals' | 'planner') => void
   getProjectViewMode: (projectId: string) => 'terminals' | 'planner'
+  setPlannerSessionFilter: (projectId: string, sessionId: string | null) => void
+  getPlannerSessionFilter: (projectId: string) => string | null
+  setSessionQueueRunning: (sessionId: string, running: boolean) => void
+  isSessionQueueRunning: (sessionId: string) => boolean
+  setTerminalMode: (enabled: boolean) => void
+  setTerminalModeSession: (id: string | null) => void
+  openSessionNotesEditor: (projectId: string, sessionId: string) => void
+  closeSessionNotesEditor: () => void
+  // Group actions
+  addGroupToProject: (projectId: string, group: SessionGroup) => void
+  removeGroupFromProject: (projectId: string, groupId: string) => void
+  updateGroupInProject: (projectId: string, groupId: string, updates: Partial<Pick<SessionGroup, 'name' | 'color'>>) => void
+  setSessionGroupId: (projectId: string, sessionId: string, groupId: string | null) => void
+  reorderSessionsInProject: (projectId: string, sessionIds: string[]) => void
+  reorderGroupsInProject: (projectId: string, groupIds: string[]) => void
   setProjectTasks: (projectId: string, tasks: TaskItem[]) => void
   addTaskToProject: (projectId: string, task: TaskItem) => void
   updateTaskInProject: (projectId: string, taskId: string, updates: Partial<TaskItem>) => void
@@ -156,7 +192,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   showAddSessionModal: false,
   showAddProjectModal: false,
   showConfigPanel: false,
+  isTerminalMode: false,
+  terminalModeSessionId: null,
   projectViewMode: {},
+  plannerSessionFilter: {},
+  sessionQueueRunning: {},
+  sessionNotesEditor: null,
   focusedCardIndex: null,
   settings: {
     theme: 'dark',
@@ -209,6 +250,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateProjectNotes: (id, notes) =>
     set((state) => ({
       projects: state.projects.map((p) => (p.id === id ? { ...p, notes } : p))
+    })),
+
+  updateSessionNotes: (projectId, sessionId, notes) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              sessions: p.sessions.map((s) => (s.id === sessionId ? { ...s, notes } : s))
+            }
+          : p
+      )
     })),
 
   addSessionToProject: (projectId, session) =>
@@ -350,6 +403,86 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ─── Task / Planner ──────────────────────────────────────────────────────
 
+  addGroupToProject: (projectId, group) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId ? { ...p, groups: [...(p.groups ?? []), group] } : p
+      )
+    })),
+
+  removeGroupFromProject: (projectId, groupId) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              groups: (p.groups ?? []).filter((g) => g.id !== groupId),
+              sessions: p.sessions.map((s) =>
+                s.groupId === groupId ? { ...s, groupId: undefined } : s
+              )
+            }
+          : p
+      )
+    })),
+
+  updateGroupInProject: (projectId, groupId, updates) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              groups: (p.groups ?? []).map((g) =>
+                g.id === groupId ? { ...g, ...updates } : g
+              )
+            }
+          : p
+      )
+    })),
+
+  setSessionGroupId: (projectId, sessionId, groupId) =>
+    set((state) => ({
+      projects: state.projects.map((p) =>
+        p.id === projectId
+          ? {
+              ...p,
+              sessions: p.sessions.map((s) =>
+                s.id === sessionId
+                  ? { ...s, groupId: groupId ?? undefined }
+                  : s
+              )
+            }
+          : p
+      )
+    })),
+
+  reorderSessionsInProject: (projectId, sessionIds) =>
+    set((state) => ({
+      projects: state.projects.map((p) => {
+        if (p.id !== projectId) return p
+        const map = new Map(p.sessions.map((s) => [s.id, s]))
+        const reordered = sessionIds.map((id) => map.get(id)).filter(Boolean) as SessionConfig[]
+        const reorderedSet = new Set(sessionIds)
+        for (const s of p.sessions) {
+          if (!reorderedSet.has(s.id)) reordered.push(s)
+        }
+        return { ...p, sessions: reordered }
+      })
+    })),
+
+  reorderGroupsInProject: (projectId, groupIds) =>
+    set((state) => ({
+      projects: state.projects.map((p) => {
+        if (p.id !== projectId) return p
+        const map = new Map((p.groups ?? []).map((g) => [g.id, g]))
+        const reordered = groupIds.map((id) => map.get(id)).filter(Boolean) as SessionGroup[]
+        const reorderedSet = new Set(groupIds)
+        for (const g of (p.groups ?? [])) {
+          if (!reorderedSet.has(g.id)) reordered.push(g)
+        }
+        return { ...p, groups: reordered }
+      })
+    })),
+
   setProjectViewMode: (projectId, mode) =>
     set((state) => ({
       projectViewMode: { ...state.projectViewMode, [projectId]: mode }
@@ -358,6 +491,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   getProjectViewMode: (projectId) => {
     return get().projectViewMode[projectId] || 'terminals'
   },
+
+  setPlannerSessionFilter: (projectId, sessionId) =>
+    set((state) => ({
+      plannerSessionFilter: { ...state.plannerSessionFilter, [projectId]: sessionId }
+    })),
+
+  getPlannerSessionFilter: (projectId) => {
+    return get().plannerSessionFilter[projectId] ?? null
+  },
+
+  setSessionQueueRunning: (sessionId, running) =>
+    set((state) => ({ sessionQueueRunning: { ...state.sessionQueueRunning, [sessionId]: running } })),
+
+  isSessionQueueRunning: (sessionId) => get().sessionQueueRunning[sessionId] ?? false,
+
+  setTerminalMode: (enabled) => set({ isTerminalMode: enabled }),
+  setTerminalModeSession: (id) => set({ terminalModeSessionId: id }),
+
+  openSessionNotesEditor: (projectId, sessionId) =>
+    set({ sessionNotesEditor: { projectId, sessionId } }),
+
+  closeSessionNotesEditor: () => set({ sessionNotesEditor: null }),
 
   setProjectTasks: (projectId, tasks) =>
     set((state) => ({
