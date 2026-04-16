@@ -1,11 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store'
-import { fetchTasks, addTaskApi, updateTaskApi, deleteTaskApi } from '../api'
+import { fetchTasks, addTaskApi, updateTaskApi, deleteTaskApi, sendInput } from '../api'
 import type { TaskItem, TaskStatus, SessionStatus } from '../types'
 
 const COLUMNS: { key: TaskStatus; label: string; color: string; dotColor: string }[] = [
   { key: 'backlog', label: 'Backlog', color: 'text-text-muted', dotColor: 'bg-text-muted' },
-  { key: 'todo', label: 'Todo', color: 'text-blue-400', dotColor: 'bg-blue-400' },
   { key: 'in-progress', label: 'In Progress', color: 'text-yellow-400', dotColor: 'bg-yellow-400' },
   { key: 'done', label: 'Done', color: 'text-green-400', dotColor: 'bg-green-400' },
 ]
@@ -20,13 +19,14 @@ export default function PlannerBoard() {
     addTaskToProject,
     updateTaskInProject,
     removeTaskFromProject,
+    getPlannerSessionFilter,
+    setPlannerSessionFilter,
   } = useAppStore()
 
   const project = projects.find((p) => p.id === activeProjectId)
   const allTasks: TaskItem[] = activeProjectId ? (projectTasks[activeProjectId] ?? []) : []
-  const sessions: SessionStatus[] = (project?.sessions ?? []).filter((s) => !s.parentSessionId)
-
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const sessions: SessionStatus[] = project?.sessions ?? []
+  const selectedSessionId = activeProjectId ? getPlannerSessionFilter(activeProjectId) : null
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [addingTo, setAddingTo] = useState<TaskStatus | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -39,9 +39,21 @@ export default function PlannerBoard() {
       .catch(() => {})
   }, [activeProjectId, config, setProjectTasks])
 
+  // Always have a session selected — default to the first terminal when none
+  // is active or the current one is gone. Planner is always scoped to one
+  // terminal, so tasks always have a clear owner.
+  useEffect(() => {
+    if (!activeProjectId) return
+    const firstSessionId = sessions[0]?.id ?? null
+    const selectionIsValid = selectedSessionId && sessions.some((s) => s.id === selectedSessionId)
+    if (!selectionIsValid && firstSessionId) {
+      setPlannerSessionFilter(activeProjectId, firstSessionId)
+    }
+  }, [activeProjectId, sessions, selectedSessionId, setPlannerSessionFilter])
+
   const tasks = selectedSessionId
     ? allTasks.filter((t) => t.assignedSessionId === selectedSessionId)
-    : allTasks
+    : []
 
   const handleDrop = useCallback(
     (status: TaskStatus) => {
@@ -62,12 +74,10 @@ export default function PlannerBoard() {
 
   const handleAddTask = useCallback(
     async (title: string, status: TaskStatus) => {
-      if (!activeProjectId || !config || !title.trim()) return
+      if (!activeProjectId || !config || !selectedSessionId || !title.trim()) return
       const task = await addTaskApi(config, activeProjectId, { title: title.trim(), status })
-      if (selectedSessionId) {
-        task.assignedSessionId = selectedSessionId
-        await updateTaskApi(config, activeProjectId, task.id, { assignedSessionId: selectedSessionId })
-      }
+      task.assignedSessionId = selectedSessionId
+      await updateTaskApi(config, activeProjectId, task.id, { assignedSessionId: selectedSessionId })
       addTaskToProject(activeProjectId, task)
       setAddingTo(null)
     },
@@ -92,6 +102,17 @@ export default function PlannerBoard() {
     [activeProjectId, config, updateTaskInProject]
   )
 
+  const handlePlayTask = useCallback(
+    (task: TaskItem) => {
+      if (!activeProjectId || !config || !task.assignedSessionId) return
+      sendInput(config, task.assignedSessionId, task.title + '\r').catch(() => {})
+      const updates = { status: 'in-progress' as const, assignedSessionId: task.assignedSessionId }
+      updateTaskInProject(activeProjectId, task.id, updates)
+      updateTaskApi(config, activeProjectId, task.id, updates).catch(() => {})
+    },
+    [activeProjectId, config, updateTaskInProject]
+  )
+
   if (!project) return <div className="p-4 text-text-muted">No project selected</div>
 
   return (
@@ -101,17 +122,22 @@ export default function PlannerBoard() {
         <span className="text-xs text-text-muted">Filter:</span>
         <select
           className="bg-bg-overlay text-sm text-text-primary border border-border-subtle rounded px-2 py-1 outline-none focus:border-accent-green/50"
-          value={selectedSessionId || '__all__'}
-          onChange={(e) => setSelectedSessionId(e.target.value === '__all__' ? null : e.target.value)}
+          value={selectedSessionId || ''}
+          onChange={(e) => {
+            if (activeProjectId) {
+              setPlannerSessionFilter(activeProjectId, e.target.value || null)
+            }
+          }}
         >
-          <option value="__all__">All terminals</option>
           {sessions.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
+            <option key={s.id} value={s.id}>{s.parentSessionId ? `Runner: ${s.name}` : s.name}</option>
           ))}
         </select>
-        <span className="text-xs text-text-muted">
-          {tasks.length} task{tasks.length !== 1 ? 's' : ''}
-        </span>
+        {selectedSessionId && (
+          <span className="text-xs text-text-muted">
+            {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
 
       {/* Kanban columns — horizontal scroll on desktop, vertical stack on mobile */}
@@ -138,6 +164,7 @@ export default function PlannerBoard() {
                 onAddTask={handleAddTask}
                 onUpdateTask={handleUpdateTask}
                 onDeleteTask={handleDeleteTask}
+                onPlayTask={handlePlayTask}
               />
             )
           })}
@@ -163,6 +190,7 @@ function KanbanColumn({
   onAddTask,
   onUpdateTask,
   onDeleteTask,
+  onPlayTask,
 }: {
   col: { key: TaskStatus; label: string; color: string; dotColor: string }
   tasks: TaskItem[]
@@ -177,6 +205,7 @@ function KanbanColumn({
   onAddTask: (title: string, status: TaskStatus) => void
   onUpdateTask: (taskId: string, updates: Partial<TaskItem>) => void
   onDeleteTask: (taskId: string) => void
+  onPlayTask: (task: TaskItem) => void
 }) {
   const [dropHighlight, setDropHighlight] = useState(false)
   // On mobile, collapse columns with 0 tasks (except when adding)
@@ -252,6 +281,7 @@ function KanbanColumn({
             onStopEdit={() => onSetEditingId(null)}
             onUpdate={(updates) => onUpdateTask(task.id, updates)}
             onDelete={() => onDeleteTask(task.id)}
+            onPlay={() => onPlayTask(task)}
             onDragStart={() => onDragStart(task.id)}
             isDragging={draggedId === task.id}
           />
@@ -316,6 +346,7 @@ function TaskCard({
   onStopEdit,
   onUpdate,
   onDelete,
+  onPlay,
   onDragStart,
   isDragging,
 }: {
@@ -326,6 +357,7 @@ function TaskCard({
   onStopEdit: () => void
   onUpdate: (updates: Partial<TaskItem>) => void
   onDelete: () => void
+  onPlay: () => void
   onDragStart: () => void
   isDragging: boolean
 }) {
@@ -420,6 +452,18 @@ function TaskCard({
       <div className="flex items-start justify-between gap-1">
         <span className="text-sm text-text-primary leading-tight">{task.title}</span>
         <div className="flex items-center gap-0.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0">
+          {task.status === 'backlog' && task.assignedSessionId && (
+            <button
+              className="text-accent-green hover:text-text-primary text-xs px-1"
+              onClick={(e) => {
+                e.stopPropagation()
+                onPlay()
+              }}
+              title={`Send "${task.title}" to ${assignedSession?.name ?? 'assigned terminal'}`}
+            >
+              ▶
+            </button>
+          )}
           <button
             className="text-text-muted hover:text-text-primary text-xs px-1"
             onClick={(e) => {

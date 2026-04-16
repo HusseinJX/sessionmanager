@@ -4,35 +4,45 @@ import type { TaskItem, TaskStatus, SessionConfig } from '../store'
 
 const COLUMNS: { key: TaskStatus; label: string; color: string }[] = [
   { key: 'backlog', label: 'Backlog', color: 'text-text-muted' },
-  { key: 'todo', label: 'Todo', color: 'text-blue-400' },
   { key: 'in-progress', label: 'In Progress', color: 'text-yellow-400' },
   { key: 'done', label: 'Done', color: 'text-green-400' }
 ]
 
 export default function PlannerBoard(): React.ReactElement {
-  const { projects, activeProjectId, addTaskToProject, updateTaskInProject, removeTaskFromProject } =
+  const {
+    projects,
+    activeProjectId,
+    addTaskToProject,
+    updateTaskInProject,
+    removeTaskFromProject,
+    getPlannerSessionFilter,
+    setPlannerSessionFilter
+  } =
     useAppStore()
 
   const project = projects.find((p) => p.id === activeProjectId)
   const allTasks: TaskItem[] = project?.tasks ?? []
-  const sessions: SessionConfig[] = (project?.sessions ?? []).filter((s) => !s.parentSessionId)
-
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const sessions: SessionConfig[] = project?.sessions ?? []
+  const selectedSessionId = activeProjectId ? getPlannerSessionFilter(activeProjectId) : null
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [addingTo, setAddingTo] = useState<TaskStatus | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
 
-  // Auto-select first session if current selection is gone
+  // Always have a session selected — default to the first terminal when none
+  // is active or the current one is gone. Planner is always scoped to one
+  // terminal, so tasks always have a clear owner.
   useEffect(() => {
-    if (selectedSessionId && !sessions.find((s) => s.id === selectedSessionId)) {
-      setSelectedSessionId(sessions[0]?.id ?? null)
+    if (!activeProjectId) return
+    const firstSessionId = sessions[0]?.id ?? null
+    const selectionIsValid = selectedSessionId && sessions.some((s) => s.id === selectedSessionId)
+    if (!selectionIsValid && firstSessionId) {
+      setPlannerSessionFilter(activeProjectId, firstSessionId)
     }
-  }, [sessions, selectedSessionId])
+  }, [activeProjectId, sessions, selectedSessionId, setPlannerSessionFilter])
 
-  // Filter tasks to selected session (or show all if none selected)
   const tasks = selectedSessionId
     ? allTasks.filter((t) => t.assignedSessionId === selectedSessionId)
-    : allTasks
+    : []
 
   // Load tasks from backend on mount
   useEffect(() => {
@@ -61,16 +71,13 @@ export default function PlannerBoard(): React.ReactElement {
 
   const handleAddTask = useCallback(
     async (title: string, status: TaskStatus) => {
-      if (!activeProjectId || !title.trim()) return
+      if (!activeProjectId || !selectedSessionId || !title.trim()) return
       const task = (await window.api.addTask(activeProjectId, {
         title: title.trim(),
         status
       })) as TaskItem
-      // Auto-assign to selected session
-      if (selectedSessionId) {
-        task.assignedSessionId = selectedSessionId
-        await window.api.updateTask(activeProjectId, task.id, { assignedSessionId: selectedSessionId })
-      }
+      task.assignedSessionId = selectedSessionId
+      await window.api.updateTask(activeProjectId, task.id, { assignedSessionId: selectedSessionId })
       addTaskToProject(activeProjectId, task)
       setAddingTo(null)
     },
@@ -96,43 +103,16 @@ export default function PlannerBoard(): React.ReactElement {
   )
 
   const handleRunTask = useCallback(
-    async (task: TaskItem) => {
-      if (!activeProjectId || !task.command) return
+    (task: TaskItem) => {
+      if (!activeProjectId) return
       const targetSessionId = task.assignedSessionId || selectedSessionId
-      const cwd = task.cwd || project?.sessions[0]?.cwd || '~'
-      const name = task.title
-
-      const stored = await window.api.addSessionToStore(activeProjectId, {
-        name,
-        cwd,
-        command: task.command
-      })
-      const store = useAppStore.getState()
-      store.addSessionToProject(activeProjectId, {
-        id: stored.id,
-        name,
-        cwd,
-        command: task.command
-      })
-      store.initSessionState(stored.id, activeProjectId)
-
-      // Mark task in-progress and link to session
-      const updates = { status: 'in-progress' as const, assignedSessionId: stored.id }
+      if (!targetSessionId) return
+      void window.api.sendInput(targetSessionId, task.title + '\r')
+      const updates = { status: 'in-progress' as const, assignedSessionId: targetSessionId }
       updateTaskInProject(activeProjectId, task.id, updates)
-      window.api.updateTask(activeProjectId, task.id, updates)
-
-      await window.api.createTerminal({
-        id: stored.id,
-        name,
-        cwd,
-        command: task.command,
-        projectId: activeProjectId
-      })
-
-      // Switch to terminals view to see it running
-      store.setProjectViewMode(activeProjectId, 'terminals')
+      void window.api.updateTask(activeProjectId, task.id, updates)
     },
-    [activeProjectId, selectedSessionId, project, updateTaskInProject]
+    [activeProjectId, selectedSessionId, updateTaskInProject]
   )
 
   if (!project) return <div className="p-4 text-text-muted">No project selected</div>
@@ -144,16 +124,16 @@ export default function PlannerBoard(): React.ReactElement {
         <span className="text-xs text-text-muted">Planner for:</span>
         <select
           className="bg-bg-overlay text-sm text-text-primary border border-border-subtle rounded px-2 py-1 outline-none focus:border-accent-green/50"
-          value={selectedSessionId || '__all__'}
+          value={selectedSessionId || ''}
           onChange={(e) => {
-            const val = e.target.value
-            setSelectedSessionId(val === '__all__' ? null : val)
+            if (activeProjectId) {
+              setPlannerSessionFilter(activeProjectId, e.target.value || null)
+            }
           }}
         >
-          <option value="__all__">All terminals</option>
           {sessions.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.name}
+              {s.parentSessionId ? `Runner: ${s.name}` : s.name}
             </option>
           ))}
         </select>
@@ -401,14 +381,14 @@ function TaskCard({
       <div className="flex items-start justify-between gap-1">
         <span className="text-sm text-text-primary leading-tight">{task.title}</span>
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          {task.command && task.status !== 'in-progress' && task.status !== 'done' && (
+          {task.status === 'backlog' && task.assignedSessionId && (
             <button
-              className="text-text-muted hover:text-accent-green text-xs px-1"
+              className="text-accent-green hover:text-text-primary text-xs px-1"
               onClick={(e) => {
                 e.stopPropagation()
                 onRun()
               }}
-              title="Run this task"
+              title={`Send "${task.title}" to ${assignedSession?.name ?? 'assigned terminal'}`}
             >
               ▶
             </button>

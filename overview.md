@@ -922,3 +922,25 @@ Redesigned UI to match Codex/t3code aesthetic with a vertical left sidebar for p
 - **`main.css`** — Background and scrollbar colors updated to match new palette; font updated to prefer `Inter`.
 
 **TypeScript:** Zero errors on `tsc --noEmit` and `tsc -p tsconfig.web.json --noEmit`.
+
+---
+
+## Checkpoint — Planner scoped to single terminal (web parity)
+
+Mirrored the renderer's single-terminal planner model into the web client and removed the "All terminals" escape hatch from both dropdowns.
+
+**Changes made:**
+- `web/src/components/PlannerBoard.tsx`:
+  - Replaced the "clear stale selection" effect with the renderer's defaulting effect: when `selectedSessionId` is null/invalid, fall back to `sessions[0]?.id`.
+  - `tasks` now collapses to `[]` when no session is selected (was: show all tasks).
+  - `handleAddTask` returns early if `!selectedSessionId`, and always writes `assignedSessionId` (no more conditional assignment).
+  - Removed `<option value="__all__">All terminals</option>`; dropdown value/onChange simplified to empty-string sentinel.
+  - Task-count badge now only renders when a session is selected.
+- `src/renderer/src/components/PlannerBoard.tsx`: same dropdown cleanup (the useEffect/tasks/handleAddTask logic was already done in the prior session).
+
+**Deploy:**
+- `cd web && npm run build` → `dist/assets/index-DFCVAW2t.js`
+- `rsync -avz --delete web/dist/ root@64.23.191.7:/opt/sessionmanager/web/dist/`
+- `systemctl restart sessionmanager` — active (running); served HTML references the new `index-DFCVAW2t.js` bundle.
+
+**Not deployed this session:** `server/dist` (no server code changes in this turn; uncommitted server edits remain local).
