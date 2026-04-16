@@ -421,6 +421,23 @@ export class HttpApiServer {
       return
     }
 
+    // POST /api/projects/:pid/sessions/:sid/play
+    // Mirrors the planner ▶ button: finds first backlog task assigned to the session,
+    // sends its title as a command, and marks it in-progress.
+    const playMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/play$/)
+    if (req.method === 'POST' && playMatch) {
+      const [, projectId, sessionId] = playMatch
+      const tasks = getTasksForProject(projectId)
+      const next = tasks
+        .filter((t) => t.status === 'backlog' && t.assignedSessionId === sessionId)
+        .sort((a, b) => a.order - b.order)[0]
+      if (!next) return this.json(res, 404, { error: 'No backlog tasks assigned to this session' })
+      const ok = this.sessionManager.submitCommand(sessionId, next.title)
+      if (!ok) return this.json(res, 404, { error: 'Session not found' })
+      const updated = updateTask(projectId, next.id, { status: 'in-progress' })
+      return this.json(res, 200, { task: updated })
+    }
+
     // DELETE /api/projects/:pid/tasks/:tid
     const taskDeleteMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)$/)
     if (req.method === 'DELETE' && taskDeleteMatch) {
