@@ -74,6 +74,32 @@ export default function PlannerBoard() {
     [draggedId, activeProjectId, config, allTasks, updateTaskInProject]
   )
 
+  const handleReorder = useCallback(
+    (targetId: string, before: boolean) => {
+      if (!draggedId || !activeProjectId || !config) return
+      const draggedTask = allTasks.find((t) => t.id === draggedId)
+      if (!draggedTask) return
+      const colTasks = allTasks
+        .filter((t) => t.status === draggedTask.status)
+        .sort((a, b) => a.order - b.order)
+      const fromIdx = colTasks.findIndex((t) => t.id === draggedId)
+      const toIdx = colTasks.findIndex((t) => t.id === targetId)
+      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) { setDraggedId(null); return }
+      const reordered = [...colTasks]
+      const [moved] = reordered.splice(fromIdx, 1)
+      const insertAt = before ? toIdx : toIdx + 1
+      reordered.splice(fromIdx < toIdx ? insertAt - 1 : insertAt, 0, moved)
+      reordered.forEach((t, i) => {
+        if (t.order !== i) {
+          updateTaskInProject(activeProjectId, t.id, { order: i })
+          updateTaskApi(config, activeProjectId, t.id, { order: i }).catch(() => {})
+        }
+      })
+      setDraggedId(null)
+    },
+    [draggedId, activeProjectId, config, allTasks, updateTaskInProject]
+  )
+
   const handleAddTask = useCallback(
     async (title: string, status: TaskStatus) => {
       if (!activeProjectId || !config || !selectedSessionId || !title.trim()) return
@@ -182,10 +208,12 @@ export default function PlannerBoard() {
                 addingTo={addingTo}
                 editingId={editingId}
                 draggedId={draggedId}
+                draggedStatus={draggedId ? (allTasks.find(t => t.id === draggedId)?.status ?? null) : null}
                 onSetAddingTo={setAddingTo}
                 onSetEditingId={setEditingId}
                 onDragStart={setDraggedId}
                 onDrop={handleDrop}
+                onReorder={handleReorder}
                 onAddTask={handleAddTask}
                 onUpdateTask={handleUpdateTask}
                 onDeleteTask={handleDeleteTask}
@@ -207,10 +235,12 @@ function KanbanColumn({
   addingTo,
   editingId,
   draggedId,
+  draggedStatus,
   onSetAddingTo,
   onSetEditingId,
   onDragStart,
   onDrop,
+  onReorder,
   onAddTask,
   onUpdateTask,
   onDeleteTask,
@@ -221,33 +251,44 @@ function KanbanColumn({
   addingTo: TaskStatus | null
   editingId: string | null
   draggedId: string | null
+  draggedStatus: TaskStatus | null
   onSetAddingTo: (s: TaskStatus | null) => void
   onSetEditingId: (id: string | null) => void
   onDragStart: (id: string) => void
   onDrop: (status: TaskStatus) => void
+  onReorder: (targetId: string, before: boolean) => void
   onAddTask: (title: string, status: TaskStatus) => void
   onUpdateTask: (taskId: string, updates: Partial<TaskItem>) => void
   onDeleteTask: (taskId: string) => void
 }) {
   const [dropHighlight, setDropHighlight] = useState(false)
-  // On mobile, collapse columns with 0 tasks (except when adding)
   const [mobileExpanded, setMobileExpanded] = useState(true)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [dragOverPos, setDragOverPos] = useState<'before' | 'after'>('before')
+
+  const isSameColumn = draggedStatus === col.key
 
   return (
     <div
       className={`
         flex flex-col sm:min-w-[220px] sm:flex-1 bg-bg-card rounded-lg border transition-all
-        ${dropHighlight ? 'border-accent-green/50 ring-1 ring-accent-green/30' : 'border-border-subtle'}
+        ${dropHighlight && !isSameColumn ? 'border-accent-green/50 ring-1 ring-accent-green/30' : 'border-border-subtle'}
       `}
       onDragOver={(e) => {
         e.preventDefault()
-        setDropHighlight(true)
+        if (!isSameColumn) setDropHighlight(true)
       }}
-      onDragLeave={() => setDropHighlight(false)}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+          setDropHighlight(false)
+          setDragOverId(null)
+        }
+      }}
       onDrop={(e) => {
         e.preventDefault()
         setDropHighlight(false)
-        onDrop(col.key)
+        setDragOverId(null)
+        if (!isSameColumn) onDrop(col.key)
       }}
     >
       {/* Column header */}
@@ -274,7 +315,6 @@ function KanbanColumn({
           >
             +
           </button>
-          {/* Mobile collapse indicator */}
           <span className="sm:hidden text-text-muted text-xs">
             {mobileExpanded ? '▾' : '▸'}
           </span>
@@ -305,6 +345,16 @@ function KanbanColumn({
             onDelete={() => onDeleteTask(task.id)}
             onDragStart={() => onDragStart(task.id)}
             isDragging={draggedId === task.id}
+            dropIndicator={dragOverId === task.id && isSameColumn ? dragOverPos : null}
+            onDragOverCard={(pos) => { setDragOverId(task.id); setDragOverPos(pos) }}
+            onDropOnCard={() => {
+              if (isSameColumn) {
+                onReorder(task.id, dragOverPos === 'before')
+              } else {
+                onDrop(col.key)
+              }
+              setDragOverId(null)
+            }}
           />
         ))}
 
@@ -369,6 +419,9 @@ function TaskCard({
   onDelete,
   onDragStart,
   isDragging,
+  dropIndicator,
+  onDragOverCard,
+  onDropOnCard,
 }: {
   task: TaskItem
   sessions: SessionStatus[]
@@ -379,6 +432,9 @@ function TaskCard({
   onDelete: () => void
   onDragStart: () => void
   isDragging: boolean
+  dropIndicator: 'before' | 'after' | null
+  onDragOverCard: (pos: 'before' | 'after') => void
+  onDropOnCard: () => void
 }) {
   const [editTitle, setEditTitle] = useState(task.title)
   const [editDesc, setEditDesc] = useState(task.description)
@@ -457,6 +513,10 @@ function TaskCard({
   }
 
   return (
+    <div className="relative">
+      {dropIndicator === 'before' && (
+        <div className="absolute -top-1 left-0 right-0 h-0.5 bg-accent-green rounded-full z-10" />
+      )}
     <div
       className={`group bg-bg-overlay rounded border border-border-subtle p-2 cursor-grab active:cursor-grabbing hover:border-text-muted/30 transition-all ${
         isDragging ? 'opacity-40 scale-95' : ''
@@ -465,6 +525,17 @@ function TaskCard({
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         onDragStart()
+      }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+        onDragOverCard(e.clientY < rect.top + rect.height / 2 ? 'before' : 'after')
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onDropOnCard()
       }}
       onClick={() => setShowDetails(!showDetails)}
     >
@@ -522,6 +593,10 @@ function TaskCard({
             </div>
           )}
         </div>
+      )}
+    </div>
+      {dropIndicator === 'after' && (
+        <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-accent-green rounded-full z-10" />
       )}
     </div>
   )
