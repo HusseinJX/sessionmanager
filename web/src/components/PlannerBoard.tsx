@@ -21,6 +21,8 @@ export default function PlannerBoard() {
     removeTaskFromProject,
     getPlannerSessionFilter,
     setPlannerSessionFilter,
+    sessionQueueRunning,
+    setSessionQueueRunning,
   } = useAppStore()
 
   const project = projects.find((p) => p.id === activeProjectId)
@@ -102,16 +104,36 @@ export default function PlannerBoard() {
     [activeProjectId, config, updateTaskInProject]
   )
 
-  const handlePlayTask = useCallback(
-    (task: TaskItem) => {
-      if (!activeProjectId || !config || !task.assignedSessionId) return
-      sendInput(config, task.assignedSessionId, task.title + '\r').catch(() => {})
-      const updates = { status: 'in-progress' as const, assignedSessionId: task.assignedSessionId }
-      updateTaskInProject(activeProjectId, task.id, updates)
-      updateTaskApi(config, activeProjectId, task.id, updates).catch(() => {})
-    },
-    [activeProjectId, config, updateTaskInProject]
-  )
+  const assignedBacklog = selectedSessionId
+    ? allTasks
+        .filter((t) => t.status === 'backlog' && t.assignedSessionId === selectedSessionId)
+        .sort((a, b) => a.order - b.order)
+    : []
+  const queueCount = assignedBacklog.length
+  const nextTask = assignedBacklog[0]
+  const queueRunning = selectedSessionId ? (sessionQueueRunning[selectedSessionId] ?? false) : false
+  const showQueueButton = Boolean(selectedSessionId) && (queueCount > 0 || queueRunning)
+
+  const handlePlayNext = useCallback(() => {
+    if (!activeProjectId || !config || !selectedSessionId) return
+    if (queueRunning) {
+      setSessionQueueRunning(selectedSessionId, false)
+      return
+    }
+    setSessionQueueRunning(selectedSessionId, true)
+    const inProgress = allTasks.find(
+      (t) => t.assignedSessionId === selectedSessionId && t.status === 'in-progress'
+    )
+    if (inProgress) return
+    if (!nextTask) {
+      setSessionQueueRunning(selectedSessionId, false)
+      return
+    }
+    sendInput(config, selectedSessionId, nextTask.title + '\r').catch(() => {})
+    const updates = { status: 'in-progress' as const, assignedSessionId: selectedSessionId }
+    updateTaskInProject(activeProjectId, nextTask.id, updates)
+    updateTaskApi(config, activeProjectId, nextTask.id, updates).catch(() => {})
+  }, [activeProjectId, config, selectedSessionId, queueRunning, nextTask, allTasks, setSessionQueueRunning, updateTaskInProject])
 
   if (!project) return <div className="p-4 text-text-muted">No project selected</div>
 
@@ -137,6 +159,23 @@ export default function PlannerBoard() {
           <span className="text-xs text-text-muted">
             {tasks.length} task{tasks.length !== 1 ? 's' : ''}
           </span>
+        )}
+        {showQueueButton && (
+          <button
+            className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 transition-colors hover:text-text-primary ${
+              queueRunning
+                ? 'text-yellow-400 border-yellow-400/40 animate-pulse'
+                : 'text-accent-green border-accent-green/40'
+            }`}
+            onClick={handlePlayNext}
+            title={
+              queueRunning
+                ? `Auto-advancing task queue — click to stop (${queueCount} remaining)`
+                : `Start auto-advance: send next task "${nextTask?.title}" and continue through backlog (${queueCount} queued)`
+            }
+          >
+            {queueRunning ? `⏸ ${queueCount}` : `▶ ${queueCount}`}
+          </button>
         )}
       </div>
 
@@ -164,7 +203,6 @@ export default function PlannerBoard() {
                 onAddTask={handleAddTask}
                 onUpdateTask={handleUpdateTask}
                 onDeleteTask={handleDeleteTask}
-                onPlayTask={handlePlayTask}
               />
             )
           })}
@@ -190,7 +228,6 @@ function KanbanColumn({
   onAddTask,
   onUpdateTask,
   onDeleteTask,
-  onPlayTask,
 }: {
   col: { key: TaskStatus; label: string; color: string; dotColor: string }
   tasks: TaskItem[]
@@ -205,7 +242,6 @@ function KanbanColumn({
   onAddTask: (title: string, status: TaskStatus) => void
   onUpdateTask: (taskId: string, updates: Partial<TaskItem>) => void
   onDeleteTask: (taskId: string) => void
-  onPlayTask: (task: TaskItem) => void
 }) {
   const [dropHighlight, setDropHighlight] = useState(false)
   // On mobile, collapse columns with 0 tasks (except when adding)
@@ -281,7 +317,6 @@ function KanbanColumn({
             onStopEdit={() => onSetEditingId(null)}
             onUpdate={(updates) => onUpdateTask(task.id, updates)}
             onDelete={() => onDeleteTask(task.id)}
-            onPlay={() => onPlayTask(task)}
             onDragStart={() => onDragStart(task.id)}
             isDragging={draggedId === task.id}
           />
@@ -346,7 +381,6 @@ function TaskCard({
   onStopEdit,
   onUpdate,
   onDelete,
-  onPlay,
   onDragStart,
   isDragging,
 }: {
@@ -357,7 +391,6 @@ function TaskCard({
   onStopEdit: () => void
   onUpdate: (updates: Partial<TaskItem>) => void
   onDelete: () => void
-  onPlay: () => void
   onDragStart: () => void
   isDragging: boolean
 }) {
@@ -452,18 +485,6 @@ function TaskCard({
       <div className="flex items-start justify-between gap-1">
         <span className="text-sm text-text-primary leading-tight">{task.title}</span>
         <div className="flex items-center gap-0.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0">
-          {task.status === 'backlog' && task.assignedSessionId && (
-            <button
-              className="text-accent-green hover:text-text-primary text-xs px-1"
-              onClick={(e) => {
-                e.stopPropagation()
-                onPlay()
-              }}
-              title={`Send "${task.title}" to ${assignedSession?.name ?? 'assigned terminal'}`}
-            >
-              ▶
-            </button>
-          )}
           <button
             className="text-text-muted hover:text-text-primary text-xs px-1"
             onClick={(e) => {

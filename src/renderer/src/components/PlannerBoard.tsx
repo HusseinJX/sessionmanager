@@ -16,7 +16,9 @@ export default function PlannerBoard(): React.ReactElement {
     updateTaskInProject,
     removeTaskFromProject,
     getPlannerSessionFilter,
-    setPlannerSessionFilter
+    setPlannerSessionFilter,
+    sessionQueueRunning,
+    setSessionQueueRunning
   } =
     useAppStore()
 
@@ -102,18 +104,36 @@ export default function PlannerBoard(): React.ReactElement {
     [activeProjectId, updateTaskInProject]
   )
 
-  const handleRunTask = useCallback(
-    (task: TaskItem) => {
-      if (!activeProjectId) return
-      const targetSessionId = task.assignedSessionId || selectedSessionId
-      if (!targetSessionId) return
-      void window.api.sendInput(targetSessionId, task.title + '\r')
-      const updates = { status: 'in-progress' as const, assignedSessionId: targetSessionId }
-      updateTaskInProject(activeProjectId, task.id, updates)
-      void window.api.updateTask(activeProjectId, task.id, updates)
-    },
-    [activeProjectId, selectedSessionId, updateTaskInProject]
-  )
+  const assignedBacklog = selectedSessionId
+    ? allTasks
+        .filter((t) => t.status === 'backlog' && t.assignedSessionId === selectedSessionId)
+        .sort((a, b) => a.order - b.order)
+    : []
+  const queueCount = assignedBacklog.length
+  const nextTask = assignedBacklog[0]
+  const queueRunning = selectedSessionId ? (sessionQueueRunning[selectedSessionId] ?? false) : false
+  const showQueueButton = Boolean(selectedSessionId) && (queueCount > 0 || queueRunning)
+
+  const handlePlayNext = useCallback((): void => {
+    if (!activeProjectId || !selectedSessionId) return
+    if (queueRunning) {
+      setSessionQueueRunning(selectedSessionId, false)
+      return
+    }
+    setSessionQueueRunning(selectedSessionId, true)
+    const inProgress = allTasks.find(
+      (t) => t.assignedSessionId === selectedSessionId && t.status === 'in-progress'
+    )
+    if (inProgress) return
+    if (!nextTask) {
+      setSessionQueueRunning(selectedSessionId, false)
+      return
+    }
+    void window.api.sendInput(selectedSessionId, nextTask.title + '\r')
+    const updates = { status: 'in-progress' as const, assignedSessionId: selectedSessionId }
+    updateTaskInProject(activeProjectId, nextTask.id, updates)
+    void window.api.updateTask(activeProjectId, nextTask.id, updates)
+  }, [activeProjectId, selectedSessionId, queueRunning, nextTask, allTasks, setSessionQueueRunning, updateTaskInProject])
 
   if (!project) return <div className="p-4 text-text-muted">No project selected</div>
 
@@ -141,6 +161,23 @@ export default function PlannerBoard(): React.ReactElement {
           <span className="text-xs text-text-muted">
             {tasks.length} task{tasks.length !== 1 ? 's' : ''}
           </span>
+        )}
+        {showQueueButton && (
+          <button
+            className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 transition-colors hover:text-text-primary ${
+              queueRunning
+                ? 'text-yellow-400 border-yellow-400/40 animate-pulse'
+                : 'text-accent-green border-accent-green/40'
+            }`}
+            onClick={handlePlayNext}
+            title={
+              queueRunning
+                ? `Auto-advancing task queue — click to stop (${queueCount} remaining)`
+                : `Start auto-advance: send next task "${nextTask?.title}" and continue through backlog (${queueCount} queued)`
+            }
+          >
+            {queueRunning ? `⏸ ${queueCount}` : `▶ ${queueCount}`}
+          </button>
         )}
       </div>
 
@@ -204,7 +241,6 @@ export default function PlannerBoard(): React.ReactElement {
                     onStopEdit={() => setEditingId(null)}
                     onUpdate={(updates) => handleUpdateTask(task.id, updates)}
                     onDelete={() => handleDeleteTask(task.id)}
-                    onRun={() => handleRunTask(task)}
                     onDragStart={() => setDraggedId(task.id)}
                     isDragging={draggedId === task.id}
                   />
@@ -273,7 +309,6 @@ function TaskCard({
   onStopEdit,
   onUpdate,
   onDelete,
-  onRun,
   onDragStart,
   isDragging
 }: {
@@ -284,7 +319,6 @@ function TaskCard({
   onStopEdit: () => void
   onUpdate: (updates: Partial<TaskItem>) => void
   onDelete: () => void
-  onRun: () => void
   onDragStart: () => void
   isDragging: boolean
 }): React.ReactElement {
@@ -381,18 +415,6 @@ function TaskCard({
       <div className="flex items-start justify-between gap-1">
         <span className="text-sm text-text-primary leading-tight">{task.title}</span>
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          {task.status === 'backlog' && task.assignedSessionId && (
-            <button
-              className="text-accent-green hover:text-text-primary text-xs px-1"
-              onClick={(e) => {
-                e.stopPropagation()
-                onRun()
-              }}
-              title={`Send "${task.title}" to ${assignedSession?.name ?? 'assigned terminal'}`}
-            >
-              ▶
-            </button>
-          )}
           <button
             className="text-text-muted hover:text-text-primary text-xs px-1"
             onClick={(e) => {

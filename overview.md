@@ -944,3 +944,22 @@ Mirrored the renderer's single-terminal planner model into the web client and re
 - `systemctl restart sessionmanager` — active (running); served HTML references the new `index-DFCVAW2t.js` bundle.
 
 **Not deployed this session:** `server/dist` (no server code changes in this turn; uncommitted server edits remain local).
+
+---
+
+## Checkpoint — Planner queue toggle button, per-task play removed
+
+Replaced the per-task ▶ button on planner cards with a single queue toggle in the filter bar, matching the terminal-header play button behavior.
+
+**Changes made:**
+- `web/src/components/PlannerBoard.tsx` and `src/renderer/src/components/PlannerBoard.tsx`:
+  - Computed `assignedBacklog`/`queueCount`/`nextTask`/`queueRunning` for the selected session.
+  - Added `handlePlayNext` with the same toggle semantics as `TerminalCard.handlePlayNext` / `FullTerminal.handlePlayNext`: running → stop; not running → start auto-advance, and kick off the first backlog task only if nothing is already in-progress.
+  - New button in the filter bar next to the task count: `▶ N` (green) / `⏸ N` (yellow, pulsing) via the shared styling.
+  - Removed per-task `▶` (`onRun`/`onPlay`) plumbing from parent → `KanbanColumn` → `TaskCard`; deleted `handleRunTask` (renderer) and `handlePlayTask` (web).
+- Kept the rest of the card affordances (edit, delete, drag) intact.
+
+**Deploy:**
+- `cd web && npm run build` → `dist/assets/index-CPJjW-a5.js`
+- Rsynced `web/dist/` to `64.23.191.7`; `systemctl restart sessionmanager`.
+- Verified: `https://64.23.191.7/` serves `index-CPJjW-a5.js`.
