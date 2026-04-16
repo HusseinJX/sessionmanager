@@ -2,8 +2,9 @@ import * as http from 'http'
 import * as https from 'https'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as os from 'os'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, setSessionQueueRunning } from './store'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
@@ -280,6 +281,22 @@ export class HttpApiServer {
       return
     }
 
+    // PUT /api/projects/:pid/sessions/:sid/queue — set/clear server-side queue flag
+    const sessionQueueMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/queue$/)
+    if (req.method === 'PUT' && sessionQueueMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const { running } = JSON.parse(body) as { running: boolean }
+          if (typeof running !== 'boolean') return this.json(res, 400, { error: 'running must be boolean' })
+          setSessionQueueRunning(sessionQueueMatch[1], sessionQueueMatch[2], running)
+          this.json(res, 200, { ok: true, running })
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
     const sessionNotesMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/notes$/)
     if (req.method === 'PUT' && sessionNotesMatch) {
       this.readBody(req).then((body) => {
@@ -435,6 +452,8 @@ export class HttpApiServer {
       const ok = this.sessionManager.submitCommand(sessionId, next.title)
       if (!ok) return this.json(res, 404, { error: 'Session not found' })
       const updated = updateTask(projectId, next.id, { status: 'in-progress' })
+      setSessionQueueRunning(projectId, sessionId, true)
+      this.pushSse('queue-started', { sessionId, projectId })
       return this.json(res, 200, { task: updated })
     }
 
@@ -443,6 +462,25 @@ export class HttpApiServer {
     if (req.method === 'DELETE' && taskDeleteMatch) {
       removeTask(taskDeleteMatch[1], taskDeleteMatch[2])
       this.json(res, 200, { ok: true })
+      return
+    }
+
+    // POST /api/upload — save an image and return its path on disk
+    if (req.method === 'POST' && urlPath === '/api/upload') {
+      this.readBody(req).then((body) => {
+        try {
+          const { name, data } = JSON.parse(body) as { name?: string; data?: string }
+          if (!data || typeof data !== 'string') return this.json(res, 400, { error: 'data required' }, req)
+          const safeName = path.basename(name ?? 'upload').replace(/[^a-zA-Z0-9._-]/g, '_') || 'upload'
+          const uploadDir = path.join(os.tmpdir(), 'sessionmanager-uploads')
+          fs.mkdirSync(uploadDir, { recursive: true })
+          const filePath = path.join(uploadDir, `${Date.now()}_${safeName}`)
+          fs.writeFileSync(filePath, Buffer.from(data, 'base64'))
+          this.json(res, 200, { path: filePath }, req)
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' }, req)
+        }
+      })
       return
     }
 

@@ -269,6 +269,40 @@ export async function updateTaskApi(
   return res.json() as Promise<TaskItem>
 }
 
+export async function setQueueRunningApi(
+  config: ServerConfig,
+  projectId: string,
+  sessionId: string,
+  running: boolean
+): Promise<void> {
+  await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}` +
+      `/sessions/${encodeURIComponent(sessionId)}/queue`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.token}` },
+      body: JSON.stringify({ running }),
+    }
+  )
+}
+
+export async function uploadImage(
+  config: ServerConfig,
+  name: string,
+  data: string
+): Promise<{ path: string }> {
+  const res = await fetch(`${config.url}/api/upload`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ name, data }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json() as Promise<{ path: string }>
+}
+
 export async function deleteTaskApi(
   config: ServerConfig,
   projectId: string,

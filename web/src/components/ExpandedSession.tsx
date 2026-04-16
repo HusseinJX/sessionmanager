@@ -4,7 +4,16 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '../store'
-import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, updateTaskApi } from '../api'
+import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, updateTaskApi, uploadImage } from '../api'
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
 
 function SidebarItem({
   label,
@@ -228,6 +237,30 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   const sseListenerRef = useRef<((e: MessageEvent<string>) => void) | null>(null)
   const isLoadedRef = useRef(false)
   const altPressedRef = useRef(false)
+  const [dragOver, setDragOver] = useState(false)
+
+  const handleTermDragOver = (e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.items).some((i) => i.type.startsWith('image/'))) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      setDragOver(true)
+    }
+  }
+
+  const handleTermDragLeave = () => setDragOver(false)
+
+  const handleTermDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith('image/'))
+    if (!file || !config) return
+    try {
+      const base64 = await fileToBase64(file)
+      const { path } = await uploadImage(config, file.name, base64)
+      sendInput(config, activeSessionId, path).catch(() => {})
+    } catch { /* ignore */ }
+    terminalRef.current?.focus()
+  }
 
   const ownerProject = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
   const primarySession = ownerProject?.sessions.find((s) => s.id === sessionId)
@@ -423,6 +456,21 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     }
     xtermTextarea?.addEventListener('beforeinput', blockAltInput as EventListener, true)
 
+    const handleImagePaste = async (e: ClipboardEvent) => {
+      const imageItem = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'))
+      if (!imageItem) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const file = imageItem.getAsFile()
+      if (!file) return
+      try {
+        const base64 = await fileToBase64(file)
+        const { path } = await uploadImage(config, file.name || 'paste.png', base64)
+        sendInput(config, activeSessionId, path).catch(() => {})
+      } catch { /* ignore */ }
+    }
+    xtermTextarea?.addEventListener('paste', handleImagePaste as unknown as EventListener, true)
+
     // Cmd combos and Alt combos are handled by our capture-phase window handler
     term.attachCustomKeyEventHandler((e: globalThis.KeyboardEvent) => {
       if (e.metaKey) return false
@@ -479,6 +527,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
     return () => {
       xtermTextarea?.removeEventListener('beforeinput', blockAltInput as EventListener, true)
+      xtermTextarea?.removeEventListener('paste', handleImagePaste as unknown as EventListener, true)
       es.removeEventListener('output', handleOutput)
       es.close()
       observer.disconnect()
@@ -615,9 +664,12 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
         {/* xterm.js terminal */}
         <div
           ref={containerRef}
-          className="flex-1 overflow-hidden p-1"
+          className={`flex-1 overflow-hidden p-1 transition-colors ${dragOver ? 'ring-2 ring-inset ring-accent-blue' : ''}`}
           style={{ background: '#0d1117' }}
           onClick={() => terminalRef.current?.focus()}
+          onDragOver={handleTermDragOver}
+          onDragLeave={handleTermDragLeave}
+          onDrop={handleTermDrop}
         />
 
         {/* Mobile virtual keyboard bar */}

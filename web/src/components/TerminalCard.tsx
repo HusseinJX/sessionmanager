@@ -1,7 +1,16 @@
 import { useState, useRef, KeyboardEvent } from 'react'
 import { useAppStore } from '../store'
 import type { SessionStatus } from '../types'
-import { sendCommand, deleteSession, updateTaskApi } from '../api'
+import { sendCommand, deleteSession, updateTaskApi, uploadImage } from '../api'
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
 
 function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: boolean }) {
   if (inputWaiting) {
@@ -102,6 +111,39 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
     openSessionNotesEditor(activeProjectId, session.id)
   }
 
+  const handleImagePaste = async (e: React.ClipboardEvent) => {
+    const imageItem = Array.from(e.clipboardData.items).find((i) => i.type.startsWith('image/'))
+    if (!imageItem || !config) return
+    e.preventDefault()
+    const file = imageItem.getAsFile()
+    if (!file) return
+    try {
+      const base64 = await fileToBase64(file)
+      const { path } = await uploadImage(config, file.name || 'paste.png', base64)
+      setCmdInput((prev) => prev + path)
+    } catch { /* ignore */ }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.items).some((i) => i.type.startsWith('image/'))) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith('image/'))
+    if (!file || !config) return
+    try {
+      const base64 = await fileToBase64(file)
+      const { path } = await uploadImage(config, file.name, base64)
+      setCmdInput((prev) => prev + path)
+      inputRef.current?.focus()
+    } catch { /* ignore */ }
+  }
+
   const sessionProjectTasks = activeProjectId ? (projectTasks[activeProjectId] ?? []) : []
   const assignedBacklog = sessionProjectTasks
     .filter((t) => t.status === 'backlog' && t.assignedSessionId === session.id)
@@ -154,6 +196,8 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
           : 'border-border-subtle'
         }
       `}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       {/* Header */}
       <div
@@ -258,6 +302,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
           value={cmdInput}
           onChange={(e) => setCmdInput(e.target.value)}
           onKeyDown={handleInputKeyDown}
+          onPaste={handleImagePaste}
           onClick={(e) => e.stopPropagation()}
           placeholder="send a command..."
           disabled={status === 'exited'}
