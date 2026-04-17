@@ -1,4 +1,4 @@
-import { useState, useRef, KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { useAppStore } from '../store'
 import type { SessionStatus } from '../types'
 import { sendCommand, deleteSession, uploadImage, setQueueRunningApi } from '../api'
@@ -64,7 +64,16 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
   const status = runtimeState?.status ?? session.status ?? 'running'
   const inputWaiting = runtimeState?.inputWaiting ?? session.inputWaiting ?? false
   const hasNewOutput = runtimeState?.hasNewOutput ?? false
-  const liveCwd = runtimeState?.currentCwd ?? session.currentCwd ?? session.cwd
+  const [localCwd, setLocalCwd] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    const h = (e: Event) => {
+      const { sessionId: sid, cwd } = (e as CustomEvent<{ sessionId: string; cwd: string }>).detail
+      if (sid === session.id) setLocalCwd(cwd)
+    }
+    window.addEventListener('sm-cwd', h)
+    return () => window.removeEventListener('sm-cwd', h)
+  }, [session.id])
+  const liveCwd = localCwd ?? runtimeState?.currentCwd ?? session.currentCwd ?? session.cwd
   const previewLines = runtimeState?.previewLines ?? session.recentLines ?? []
   const liveDisplayName = liveCwd.split('/').filter(Boolean).pop() ?? session.name
 

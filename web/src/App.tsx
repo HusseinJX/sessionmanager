@@ -150,6 +150,7 @@ export default function App() {
       if (!mounted) return
       const { sessionId, cwd } = JSON.parse(e.data) as { sessionId: string; cwd: string }
       updateSessionCwd(sessionId, cwd)
+      window.dispatchEvent(new CustomEvent('sm-cwd', { detail: { sessionId, cwd } }))
     })
 
     es.onerror = () => {

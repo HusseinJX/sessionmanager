@@ -35,6 +35,15 @@ export default function PlannerBoard() {
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [addingTo, setAddingTo] = useState<TaskStatus | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [liveCwds, setLiveCwds] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const h = (e: Event) => {
+      const { sessionId, cwd } = (e as CustomEvent<{ sessionId: string; cwd: string }>).detail
+      setLiveCwds((prev) => ({ ...prev, [sessionId]: cwd }))
+    }
+    window.addEventListener('sm-cwd', h)
+    return () => window.removeEventListener('sm-cwd', h)
+  }, [])
 
   // Load tasks on mount / project change
   useEffect(() => {
@@ -172,7 +181,7 @@ export default function PlannerBoard() {
           }}
         >
           {sessions.map((s) => {
-            const liveCwd = sessionStates[s.id]?.currentCwd ?? s.currentCwd ?? s.cwd ?? ''
+            const liveCwd = liveCwds[s.id] ?? sessionStates[s.id]?.currentCwd ?? s.currentCwd ?? s.cwd ?? ''
             const label = liveCwd.split('/').filter(Boolean).pop() ?? s.name
             return (
               <option key={s.id} value={s.id}>

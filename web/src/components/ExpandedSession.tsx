@@ -228,7 +228,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [liveCwd, setLiveCwd] = useState<string | null>(null)
+  const [liveCwds, setLiveCwds] = useState<Record<string, string>>({})
 
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -274,9 +274,17 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     if (ownerProject) setProjectViewMode(ownerProject.id, 'terminals')
   }, [setExpandedSession, ownerProject, setProjectViewMode])
 
+  useEffect(() => {
+    const h = (e: Event) => {
+      const { sessionId: sid, cwd } = (e as CustomEvent<{ sessionId: string; cwd: string }>).detail
+      setLiveCwds((prev) => ({ ...prev, [sid]: cwd }))
+    }
+    window.addEventListener('sm-cwd', h)
+    return () => window.removeEventListener('sm-cwd', h)
+  }, [])
+
   const handleSwitchSession = (id: string) => {
     setActiveSessionId(id)
-    setLiveCwd(null)
     setSidebarOpen(false)
   }
 
@@ -319,7 +327,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   const handleAddRunner = async () => {
     if (!ownerProject || !config) return
-    const cwd = sessionStates[activeSessionId]?.currentCwd ?? primarySession?.cwd ?? '~'
+    const cwd = liveCwds[activeSessionId] ?? sessionStates[activeSessionId]?.currentCwd ?? primarySession?.cwd ?? '~'
     const name = cwd.split('/').filter(Boolean).pop() ?? 'runner'
     const created = await createSession(config, ownerProject.id, {
       name,
@@ -532,19 +540,12 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     }
     es.addEventListener('output', handleOutput)
 
-    const handleCwd = (e: MessageEvent<string>) => {
-      const { sessionId: sid, cwd } = JSON.parse(e.data) as { sessionId: string; cwd: string }
-      if (sid === activeSessionId) setLiveCwd(cwd)
-    }
-    es.addEventListener('cwd', handleCwd)
-
     setTimeout(() => term.focus(), 50)
 
     return () => {
       xtermTextarea?.removeEventListener('beforeinput', blockAltInput as EventListener, true)
       xtermTextarea?.removeEventListener('paste', handleImagePaste as unknown as EventListener, true)
       es.removeEventListener('output', handleOutput)
-      es.removeEventListener('cwd', handleCwd)
       es.close()
       observer.disconnect()
       try { fitAddon.dispose() } catch { /* ignore */ }
@@ -568,7 +569,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleClose])
 
-  const activeCwd = liveCwd
+  const activeCwd = liveCwds[activeSessionId]
     ?? sessionState?.currentCwd
     ?? (activeSessionId === sessionId ? primarySession?.currentCwd ?? primarySession?.cwd : runners.find((r) => r.id === activeSessionId)?.cwd)
     ?? ''
@@ -581,7 +582,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   const activeSessionConfig = ownerProject?.sessions.find((s) => s.id === activeSessionId)
   const activeHasNotes = Boolean(activeSessionConfig?.notes?.trim())
 
-  const primaryLiveCwd = sessionStates[sessionId]?.currentCwd ?? primarySession?.cwd ?? ''
+  const primaryLiveCwd = liveCwds[sessionId] ?? sessionStates[sessionId]?.currentCwd ?? primarySession?.cwd ?? ''
   const primaryLabel = primaryLiveCwd.split('/').filter(Boolean).pop() ?? primarySession?.name ?? 'Terminal'
   const primarySublabel = primaryLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
 
@@ -738,7 +739,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
         {runners.map((r) => {
           const rState = sessionStates[r.id]
-          const rLiveCwd = rState?.currentCwd ?? r.cwd
+          const rLiveCwd = liveCwds[r.id] ?? rState?.currentCwd ?? r.cwd
           const rLabel = rLiveCwd.split('/').filter(Boolean).pop() ?? 'runner'
           const rSublabel = rLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
           return (
