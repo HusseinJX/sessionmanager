@@ -20,6 +20,7 @@ export default function PlannerBoard(): React.ReactElement {
     sessionQueueRunning,
     setSessionQueueRunning,
     setExpandedSession,
+    openSessionNotesEditor,
   } =
     useAppStore()
 
@@ -163,20 +164,35 @@ export default function PlannerBoard(): React.ReactElement {
             </option>
           ))}
         </select>
-        {selectedSessionId && (
-          <>
-            <button
-              className="text-[10px] uppercase tracking-wide border border-border-subtle rounded px-1.5 py-0.5 text-text-muted hover:text-text-primary transition-colors"
-              onClick={() => setExpandedSession(selectedSessionId)}
-              title="Open this terminal in expanded view"
-            >
-              terminal
-            </button>
-            <span className="text-xs text-text-muted">
-              {tasks.length} task{tasks.length !== 1 ? 's' : ''}
-            </span>
-          </>
-        )}
+        {selectedSessionId && (() => {
+          const selectedSession = sessions.find((s) => s.id === selectedSessionId)
+          const hasNotes = Boolean(selectedSession?.notes?.trim())
+          return (
+            <>
+              <button
+                className="text-[10px] uppercase tracking-wide border border-border-subtle rounded px-1.5 py-0.5 text-text-muted hover:text-text-primary transition-colors"
+                onClick={() => setExpandedSession(selectedSessionId)}
+                title="Open this terminal in expanded view"
+              >
+                terminal
+              </button>
+              <button
+                className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 transition-colors hover:text-text-primary ${
+                  hasNotes
+                    ? 'text-accent-blue border-accent-blue/40'
+                    : 'text-text-muted border-border-subtle'
+                }`}
+                onClick={() => activeProjectId && openSessionNotesEditor(activeProjectId, selectedSessionId)}
+                title="View or edit terminal notes"
+              >
+                notes
+              </button>
+              <span className="text-xs text-text-muted">
+                {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+              </span>
+            </>
+          )
+        })()}
         {showQueueButton && (
           <button
             className={`text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 transition-colors hover:text-text-primary ${
