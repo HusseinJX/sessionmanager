@@ -18,7 +18,8 @@ export default function PlannerBoard(): React.ReactElement {
     getPlannerSessionFilter,
     setPlannerSessionFilter,
     sessionQueueRunning,
-    setSessionQueueRunning
+    setSessionQueueRunning,
+    setExpandedSession,
   } =
     useAppStore()
 
@@ -59,6 +60,11 @@ export default function PlannerBoard(): React.ReactElement {
       if (!draggedId || !activeProjectId) return
       const task = allTasks.find((t) => t.id === draggedId)
       if (!task || task.status === status) {
+        setDraggedId(null)
+        return
+      }
+      // Backlog items can only go to done or stay in backlog — in-progress is set by play
+      if (task.status === 'backlog' && status === 'in-progress') {
         setDraggedId(null)
         return
       }
@@ -158,9 +164,18 @@ export default function PlannerBoard(): React.ReactElement {
           ))}
         </select>
         {selectedSessionId && (
-          <span className="text-xs text-text-muted">
-            {tasks.length} task{tasks.length !== 1 ? 's' : ''}
-          </span>
+          <>
+            <button
+              className="text-[10px] uppercase tracking-wide border border-border-subtle rounded px-1.5 py-0.5 text-text-muted hover:text-text-primary transition-colors"
+              onClick={() => setExpandedSession(selectedSessionId)}
+              title="Open this terminal in expanded view"
+            >
+              terminal
+            </button>
+            <span className="text-xs text-text-muted">
+              {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+            </span>
+          </>
         )}
         {showQueueButton && (
           <button
@@ -188,11 +203,15 @@ export default function PlannerBoard(): React.ReactElement {
             .filter((t) => t.status === col.key)
             .sort((a, b) => a.order - b.order)
 
+          const draggedTask = draggedId ? allTasks.find((t) => t.id === draggedId) : null
+          const canDrop = !(draggedTask?.status === 'backlog' && col.key === 'in-progress')
+
           return (
             <div
               key={col.key}
               className="flex flex-col min-w-[240px] flex-1 bg-bg-card rounded-lg border border-border-subtle"
               onDragOver={(e) => {
+                if (!canDrop) return
                 e.preventDefault()
                 e.currentTarget.classList.add('ring-1', 'ring-accent-green/50')
               }}
@@ -202,7 +221,8 @@ export default function PlannerBoard(): React.ReactElement {
               onDrop={(e) => {
                 e.preventDefault()
                 e.currentTarget.classList.remove('ring-1', 'ring-accent-green/50')
-                handleDrop(col.key)
+                if (canDrop) handleDrop(col.key)
+                else setDraggedId(null)
               }}
             >
               {/* Column header */}
@@ -242,6 +262,7 @@ export default function PlannerBoard(): React.ReactElement {
                     onUpdate={(updates) => handleUpdateTask(task.id, updates)}
                     onDelete={() => handleDeleteTask(task.id)}
                     onDragStart={() => setDraggedId(task.id)}
+                    onDragEnd={() => setDraggedId(null)}
                     isDragging={draggedId === task.id}
                   />
                 ))}
@@ -310,6 +331,7 @@ function TaskCard({
   onUpdate,
   onDelete,
   onDragStart,
+  onDragEnd,
   isDragging
 }: {
   task: TaskItem
@@ -320,6 +342,7 @@ function TaskCard({
   onUpdate: (updates: Partial<TaskItem>) => void
   onDelete: () => void
   onDragStart: () => void
+  onDragEnd: () => void
   isDragging: boolean
 }): React.ReactElement {
   const [editTitle, setEditTitle] = useState(task.title)
@@ -410,6 +433,7 @@ function TaskCard({
         e.dataTransfer.effectAllowed = 'move'
         onDragStart()
       }}
+      onDragEnd={onDragEnd}
       onClick={() => setShowDetails(!showDetails)}
     >
       <div className="flex items-start justify-between gap-1">

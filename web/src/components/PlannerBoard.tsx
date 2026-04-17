@@ -23,6 +23,7 @@ export default function PlannerBoard() {
     setPlannerSessionFilter,
     sessionQueueRunning,
     setSessionQueueRunning,
+    setExpandedSession,
   } = useAppStore()
 
   const project = projects.find((p) => p.id === activeProjectId)
@@ -62,6 +63,11 @@ export default function PlannerBoard() {
       if (!draggedId || !activeProjectId || !config) return
       const task = allTasks.find((t) => t.id === draggedId)
       if (!task || task.status === status) {
+        setDraggedId(null)
+        return
+      }
+      // Backlog items can only go to done — in-progress is set by play
+      if (task.status === 'backlog' && status === 'in-progress') {
         setDraggedId(null)
         return
       }
@@ -168,9 +174,18 @@ export default function PlannerBoard() {
           ))}
         </select>
         {selectedSessionId && (
-          <span className="text-xs text-text-muted">
-            {tasks.length} task{tasks.length !== 1 ? 's' : ''}
-          </span>
+          <>
+            <button
+              className="text-[10px] uppercase tracking-wide border border-border-subtle rounded px-1.5 py-0.5 text-text-muted hover:text-text-primary transition-colors"
+              onClick={() => setExpandedSession(selectedSessionId)}
+              title="Open this terminal in expanded view"
+            >
+              terminal
+            </button>
+            <span className="text-xs text-text-muted">
+              {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+            </span>
+          </>
         )}
         {showQueueButton && (
           <button
@@ -212,6 +227,7 @@ export default function PlannerBoard() {
                 onSetAddingTo={setAddingTo}
                 onSetEditingId={setEditingId}
                 onDragStart={setDraggedId}
+                onDragEnd={() => setDraggedId(null)}
                 onDrop={handleDrop}
                 onReorder={handleReorder}
                 onAddTask={handleAddTask}
@@ -239,6 +255,7 @@ function KanbanColumn({
   onSetAddingTo,
   onSetEditingId,
   onDragStart,
+  onDragEnd,
   onDrop,
   onReorder,
   onAddTask,
@@ -255,6 +272,7 @@ function KanbanColumn({
   onSetAddingTo: (s: TaskStatus | null) => void
   onSetEditingId: (id: string | null) => void
   onDragStart: (id: string) => void
+  onDragEnd: () => void
   onDrop: (status: TaskStatus) => void
   onReorder: (targetId: string, before: boolean) => void
   onAddTask: (title: string, status: TaskStatus) => void
@@ -267,16 +285,17 @@ function KanbanColumn({
   const [dragOverPos, setDragOverPos] = useState<'before' | 'after'>('before')
 
   const isSameColumn = draggedStatus === col.key
+  const canDrop = !(draggedStatus === 'backlog' && col.key === 'in-progress')
 
   return (
     <div
       className={`
         flex flex-col sm:min-w-[220px] sm:flex-1 bg-bg-card rounded-lg border transition-all
-        ${dropHighlight && !isSameColumn ? 'border-accent-green/50 ring-1 ring-accent-green/30' : 'border-border-subtle'}
+        ${dropHighlight && !isSameColumn && canDrop ? 'border-accent-green/50 ring-1 ring-accent-green/30' : 'border-border-subtle'}
       `}
       onDragOver={(e) => {
-        e.preventDefault()
-        if (!isSameColumn) setDropHighlight(true)
+        if (!isSameColumn && canDrop) e.preventDefault()
+        if (!isSameColumn && canDrop) setDropHighlight(true)
       }}
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node)) {
@@ -288,7 +307,7 @@ function KanbanColumn({
         e.preventDefault()
         setDropHighlight(false)
         setDragOverId(null)
-        if (!isSameColumn) onDrop(col.key)
+        if (!isSameColumn && canDrop) onDrop(col.key)
       }}
     >
       {/* Column header */}
@@ -344,14 +363,17 @@ function KanbanColumn({
             onUpdate={(updates) => onUpdateTask(task.id, updates)}
             onDelete={() => onDeleteTask(task.id)}
             onDragStart={() => onDragStart(task.id)}
+            onDragEnd={onDragEnd}
             isDragging={draggedId === task.id}
             dropIndicator={dragOverId === task.id && isSameColumn ? dragOverPos : null}
             onDragOverCard={(pos) => { setDragOverId(task.id); setDragOverPos(pos) }}
             onDropOnCard={() => {
               if (isSameColumn) {
                 onReorder(task.id, dragOverPos === 'before')
-              } else {
+              } else if (canDrop) {
                 onDrop(col.key)
+              } else {
+                onDragEnd()
               }
               setDragOverId(null)
             }}
@@ -418,6 +440,7 @@ function TaskCard({
   onUpdate,
   onDelete,
   onDragStart,
+  onDragEnd,
   isDragging,
   dropIndicator,
   onDragOverCard,
@@ -431,6 +454,7 @@ function TaskCard({
   onUpdate: (updates: Partial<TaskItem>) => void
   onDelete: () => void
   onDragStart: () => void
+  onDragEnd: () => void
   isDragging: boolean
   dropIndicator: 'before' | 'after' | null
   onDragOverCard: (pos: 'before' | 'after') => void
@@ -526,6 +550,7 @@ function TaskCard({
         e.dataTransfer.effectAllowed = 'move'
         onDragStart()
       }}
+      onDragEnd={onDragEnd}
       onDragOver={(e) => {
         e.preventDefault()
         e.stopPropagation()
