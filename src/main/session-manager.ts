@@ -69,6 +69,10 @@ const INSTANT_PROMPT_PATTERNS = [
   /enter\s+passphrase/i,         // SSH passphrases
   />>>\s*$/,                     // Python REPL
   /\(Use arrow keys\)/i,         // inquirer multi-choice prompt
+  // Claude Code trust dialog (current + legacy wordings)
+  /Quick safety check/i,
+  /Is this a project you created or one you trust/i,
+  /\bDo you trust\b/i,
 ]
 
 function detectInstantPrompt(output: string): boolean {
@@ -250,8 +254,13 @@ export class SessionManager extends EventEmitter {
           if (waiting && !session.inputWaiting) {
             session.inputWaiting = true
             session.activityBytes = 0
-            const recent = session.outputBuffer.slice(-5).join('')
-            const isAtPrompt = detectInstantPrompt(recent)
+            // Use interpreted on-screen lines, not a 5-chunk raw window:
+            // TUI redraws (spinners, etc.) can push the prompt text out of
+            // a small window even while the prompt is still on screen.
+            const screenLines = this.extractRecentLines(session, 50)
+            const isAtPrompt = screenLines.some((l) =>
+              INSTANT_PROMPT_PATTERNS.some((p) => p.test(l))
+            )
             this.emitInputWaiting(id, session, isAtPrompt)
           }
         })
@@ -338,18 +347,13 @@ export class SessionManager extends EventEmitter {
         } catch { /* malformed URL — ignore */ }
       }
 
-      // Fast-path pattern detection — only high-confidence patterns (passwords, y/n, etc.)
-      // Broad patterns (ends with ? or :) are handled by idle + process-state check instead.
+      // Fast-path pattern detection. Sticky: once we detect an instant prompt,
+      // leave inputWaiting=true until user input clears it (writeToSession /
+      // submitCommand). Clearing based on a 5-chunk sliding window caused
+      // flicker while a prompt was still on screen but its text had scrolled
+      // out of the window, which let the idle path fire during a live dialog.
       const recent = session.outputBuffer.slice(-5).join('')
-      const wasWaiting = session.inputWaiting
-      const nowWaiting = detectInstantPrompt(recent)
-
-      if (!nowWaiting && wasWaiting) {
-        session.inputWaiting = false
-        this.broadcast('terminal:input-resolved', { id: meta.id })
-      }
-
-      if (nowWaiting && !wasWaiting) {
+      if (!session.inputWaiting && detectInstantPrompt(recent)) {
         session.inputWaiting = true
         session.activityBytes = 0
         this.emitInputWaiting(meta.id, session, true)
