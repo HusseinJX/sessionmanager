@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '../store'
-import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, uploadImage, setQueueRunningApi } from '../api'
+import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, uploadImage, setQueueRunningApi, fetchTasks } from '../api'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -290,6 +290,14 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     openSessionNotesEditor(ownerProject.id, activeSessionId)
   }, [ownerProject, activeSessionId, openSessionNotesEditor])
 
+  useEffect(() => {
+    if (!config || !ownerProject) return
+    if (projectTasks[ownerProject.id]) return
+    fetchTasks(config, ownerProject.id)
+      .then((tasks) => useAppStore.getState().setProjectTasks(ownerProject.id, tasks))
+      .catch(() => {})
+  }, [config, ownerProject?.id])
+
   const activeAssignedBacklog = ownerProject
     ? (projectTasks[ownerProject.id] ?? [])
         .filter((t) => t.status === 'backlog' && t.assignedSessionId === activeSessionId)
@@ -465,12 +473,23 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
       return true
     })
 
-    // Send keystrokes to server — but drop xterm's auto-replies to host
-    // queries (DA / CPR / DSR), which otherwise get forwarded as spurious
-    // input during a TUI redraw and dismiss confirm dialogs.
+    // Strip xterm.js's automatic replies to host queries (DA, CPR, DSR,
+    // focus in/out, OSC color reports). Claude's TUI redraw emits these
+    // queries; xterm answers via onData. Forwarding those answers to the
+    // pty feeds Claude spurious stdin (dismissing/corrupting its confirm
+    // dialog) and clears the server-side sticky inputWaiting flag, which
+    // is why auto-Enter stops firing when the terminal is expanded.
+    // A single onData burst can concatenate several replies, so strip
+    // globally and only suppress the send when nothing substantive remains.
+    const QUERY_REPLY =
+      /\x1b\](?:[^\x07\x1b]*)(?:\x07|\x1b\\)|\x1b\[(?:\?[\d;]*c|>[\d;]*c|[\d;]+R|\d*n|[IO])/g
     term.onData((data) => {
-      if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data)) return
-      sendInput(config, activeSessionId, data).catch(() => {})
+      const clean = data.replace(QUERY_REPLY, '')
+      if (clean !== data) {
+        console.debug('[expanded] xterm auto-reply stripped', JSON.stringify(data))
+      }
+      if (!clean) return
+      sendInput(config, activeSessionId, clean).catch(() => {})
     })
 
     // Fit & resize

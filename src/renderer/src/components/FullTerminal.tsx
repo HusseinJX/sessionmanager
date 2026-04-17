@@ -387,14 +387,14 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
       return true
     })
 
+    // See note below: strip xterm.js's auto-replies to DA/CPR/DSR queries so
+    // they don't reach the pty (they dismiss Claude's confirm dialogs and
+    // clear the sticky inputWaiting flag, breaking auto-Enter while expanded).
+    const QUERY_REPLY = /\x1b\[(?:\?[\d;]*c|>[\d;]*c|[\d;]+R|\d*n)/g
     term.onData((data) => {
-      // Drop xterm.js's automatic replies to host queries (Primary/Secondary DA,
-      // CPR, DSR). Forwarding them to the pty feeds spurious "input" to TUIs
-      // like Claude Code during a redraw, which dismisses prompts and also
-      // clears our sticky inputWaiting flag — breaking auto-Enter on confirm
-      // dialogs while the terminal is expanded.
-      if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data)) return
-      window.api.sendInput(activeSessionId, data)
+      const clean = data.replace(QUERY_REPLY, '')
+      if (!clean) return
+      window.api.sendInput(activeSessionId, clean)
     })
 
     const doFit = (): void => {

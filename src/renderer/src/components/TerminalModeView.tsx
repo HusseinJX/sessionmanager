@@ -102,11 +102,12 @@ function XtermPane({ sessionId }: { sessionId: string }): React.ReactElement {
       return true
     })
 
+    // Strip xterm's auto-replies to DA/CPR/DSR — see FullTerminal for why.
+    const QUERY_REPLY = /\x1b\[(?:\?[\d;]*c|>[\d;]*c|[\d;]+R|\d*n)/g
     term.onData((data) => {
-      // Drop xterm.js auto-replies to host queries (DA / CPR / DSR) — see
-      // FullTerminal for rationale.
-      if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data)) return
-      window.api.sendInput(sessionId, data)
+      const clean = data.replace(QUERY_REPLY, '')
+      if (!clean) return
+      window.api.sendInput(sessionId, clean)
     })
 
     const doFit = (): void => {
