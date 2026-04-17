@@ -228,6 +228,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [liveCwd, setLiveCwd] = useState<string | null>(null)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -275,6 +276,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   const handleSwitchSession = (id: string) => {
     setActiveSessionId(id)
+    setLiveCwd(null)
     setSidebarOpen(false)
   }
 
@@ -530,12 +532,19 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     }
     es.addEventListener('output', handleOutput)
 
+    const handleCwd = (e: MessageEvent<string>) => {
+      const { sessionId: sid, cwd } = JSON.parse(e.data) as { sessionId: string; cwd: string }
+      if (sid === activeSessionId) setLiveCwd(cwd)
+    }
+    es.addEventListener('cwd', handleCwd)
+
     setTimeout(() => term.focus(), 50)
 
     return () => {
       xtermTextarea?.removeEventListener('beforeinput', blockAltInput as EventListener, true)
       xtermTextarea?.removeEventListener('paste', handleImagePaste as unknown as EventListener, true)
       es.removeEventListener('output', handleOutput)
+      es.removeEventListener('cwd', handleCwd)
       es.close()
       observer.disconnect()
       try { fitAddon.dispose() } catch { /* ignore */ }
@@ -559,7 +568,8 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleClose])
 
-  const activeCwd = sessionState?.currentCwd
+  const activeCwd = liveCwd
+    ?? sessionState?.currentCwd
     ?? (activeSessionId === sessionId ? primarySession?.currentCwd ?? primarySession?.cwd : runners.find((r) => r.id === activeSessionId)?.cwd)
     ?? ''
   const displayName = activeCwd.split('/').filter(Boolean).pop()
