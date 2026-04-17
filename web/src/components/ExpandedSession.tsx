@@ -465,8 +465,11 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
       return true
     })
 
-    // Send keystrokes to server
+    // Send keystrokes to server — but drop xterm's auto-replies to host
+    // queries (DA / CPR / DSR), which otherwise get forwarded as spurious
+    // input during a TUI redraw and dismiss confirm dialogs.
     term.onData((data) => {
+      if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data)) return
       sendInput(config, activeSessionId, data).catch(() => {})
     })
 

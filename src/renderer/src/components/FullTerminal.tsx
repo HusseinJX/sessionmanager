@@ -388,6 +388,12 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
     })
 
     term.onData((data) => {
+      // Drop xterm.js's automatic replies to host queries (Primary/Secondary DA,
+      // CPR, DSR). Forwarding them to the pty feeds spurious "input" to TUIs
+      // like Claude Code during a redraw, which dismisses prompts and also
+      // clears our sticky inputWaiting flag — breaking auto-Enter on confirm
+      // dialogs while the terminal is expanded.
+      if (/^\x1b\[[?>]?[\d;]*[cRn]$/.test(data)) return
       window.api.sendInput(activeSessionId, data)
     })
 

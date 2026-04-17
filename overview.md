@@ -1018,3 +1018,20 @@ Replaced the per-task ▶ button on planner cards with a single queue toggle in 
 **Web client (`web/src/components/PlannerBoard.tsx`):**
 - `handlePlayNext` simplified: just calls `setQueueRunningApi(running)` — server kicks off first task automatically.
 - Removed `sendCommand` import.
+
+---
+
+## Checkpoint — Auto-Enter fails in expanded terminal
+
+**Problem:** Auto-press-Enter on Claude's confirm dialogs ("Quick safety check", y/n) worked in the grid view but stopped working once the terminal was expanded.
+
+**Root cause:** `MiniTerminal` (grid) uses `disableStdin: true`, so xterm never talks back to the pty. `FullTerminal`, `TerminalModeView`, and the web companion's `ExpandedSession` all bind `term.onData → sendInput`. xterm.js automatically replies to host CSI queries (Primary/Secondary DA `\e[?…c` / `\e[>…c`, CPR `\e[…R`, DSR `\e[…n`) during Claude's TUI redraws. Those auto-replies (1) flowed into Claude's stdin and dismissed/corrupted the prompt, and (2) ran through `writeToSession`, which reset the sticky `inputWaiting` flag added in 5f234ed.
+
+**Fix:** Drop pure CSI query replies at the `term.onData` source in all three renderers:
+- `src/renderer/src/components/FullTerminal.tsx:390`
+- `src/renderer/src/components/TerminalModeView.tsx:105`
+- `web/src/components/ExpandedSession.tsx:469`
+
+Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before forwarding to the pty.
+
+**Deploy:** Web bundle rebuilt (`index-CWzv5rTD.js`), rsynced to `64.23.191.7`, `sessionmanager` service restarted.
