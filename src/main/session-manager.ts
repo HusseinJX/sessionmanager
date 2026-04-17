@@ -73,8 +73,8 @@ const INSTANT_PROMPT_PATTERNS = [
 
 function detectInstantPrompt(output: string): boolean {
   const stripped = stripAnsiForExport(output)
-  const lastLine = stripped.split(/\r?\n/).filter((l) => l.trim()).pop() || ''
-  return INSTANT_PROMPT_PATTERNS.some((p) => p.test(lastLine))
+  const lines = stripped.split(/\r?\n/).filter((l) => l.trim())
+  return lines.some((line) => INSTANT_PROMPT_PATTERNS.some((p) => p.test(line)))
 }
 
 // ─── OS-level process state check ──────────────────────────────────────────
@@ -207,8 +207,8 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  private emitInputWaiting(id: string, session: PtySession): void {
-    this.broadcast('terminal:input-waiting', { id })
+  private emitInputWaiting(id: string, session: PtySession, isInstant: boolean): void {
+    this.broadcast('terminal:input-waiting', { id, isInstant })
     if (!this.win?.isVisible() && Notification.isSupported()) {
       const notification = new Notification({
         title: `${session.meta.name} is waiting`,
@@ -221,7 +221,7 @@ export class SessionManager extends EventEmitter {
       })
       notification.show()
     }
-    this.emit('input-waiting', id)
+    this.emit('input-waiting', id, isInstant)
   }
 
   private flushBatches(): void {
@@ -250,7 +250,9 @@ export class SessionManager extends EventEmitter {
           if (waiting && !session.inputWaiting) {
             session.inputWaiting = true
             session.activityBytes = 0
-            this.emitInputWaiting(id, session)
+            const recent = session.outputBuffer.slice(-5).join('')
+            const isAtPrompt = detectInstantPrompt(recent)
+            this.emitInputWaiting(id, session, isAtPrompt)
           }
         })
       }
@@ -350,7 +352,7 @@ export class SessionManager extends EventEmitter {
       if (nowWaiting && !wasWaiting) {
         session.inputWaiting = true
         session.activityBytes = 0
-        this.emitInputWaiting(meta.id, session)
+        this.emitInputWaiting(meta.id, session, true)
       }
     })
 

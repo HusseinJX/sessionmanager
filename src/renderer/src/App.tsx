@@ -35,7 +35,7 @@ declare global {
         callback: (event: { id: string; code: number }) => void
       ) => () => void
       onInputWaiting: (
-        callback: (event: { id: string }) => void
+        callback: (event: { id: string; isInstant?: boolean }) => void
       ) => () => void
       onInputResolved: (
         callback: (event: { id: string }) => void
@@ -323,7 +323,7 @@ export default function App(): React.ReactElement {
       }
     })
 
-    const removeInputWaiting = window.api.onInputWaiting(({ id }) => {
+    const removeInputWaiting = window.api.onInputWaiting(({ id, isInstant }) => {
       setInputWaiting(id, true)
       // Play chime unless the user already has this exact terminal expanded and visible
       const { expandedSessionId } = useAppStore.getState()
@@ -332,11 +332,19 @@ export default function App(): React.ReactElement {
         playAlertChime()
       }
 
-      // Auto-advance the task queue if the play button has been engaged.
-      // Fires once per idle transition — after the in-progress task returns to
-      // the prompt, mark it done and send the next backlog task.
       const state = useAppStore.getState()
       if (!state.sessionQueueRunning[id]) return
+
+      if (isInstant) {
+        // Intermediate prompt (trust dialog, y/n, arrow keys) — auto-answer with Enter
+        // without advancing the queue. The queue advances on the next idle-based fire
+        // once the process actually returns to the shell prompt.
+        void window.api.submitCommand(id, '')
+        return
+      }
+
+      // Idle-based: the in-progress task has returned to the shell prompt.
+      // Mark it done and send the next backlog task.
       const project = state.projects.find((p) => p.sessions.some((s) => s.id === id))
       if (!project) return
       const tasks = project.tasks ?? []

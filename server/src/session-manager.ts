@@ -63,12 +63,18 @@ const INSTANT_PROMPT_PATTERNS = [
   /enter\s+passphrase/i,
   />>>\s*$/,
   /\(Use arrow keys\)/i,
+  // Claude Code trust dialog (current + legacy wordings)
+  /Quick safety check/i,
+  /Is this a project you created or one you trust/i,
+  /\bDo you trust\b/i,
 ]
 
 function detectInstantPrompt(output: string): boolean {
   const stripped = stripAnsi(output)
-  const lastLine = stripped.split(/\r?\n/).filter((l) => l.trim()).pop() || ''
-  return INSTANT_PROMPT_PATTERNS.some((p) => p.test(lastLine))
+  const lines = stripped.split(/\r?\n/).filter((l) => l.trim())
+  // Check all visible lines — multi-line TUI prompts (e.g. arrow-key menus) put
+  // "(Use arrow keys)" on the first line, not the last.
+  return lines.some((line) => INSTANT_PROMPT_PATTERNS.some((p) => p.test(line)))
 }
 
 function getLeafPid(pid: number): Promise<number> {
@@ -244,7 +250,14 @@ export class SessionManager extends EventEmitter {
           if (waiting && !session.inputWaiting) {
             session.inputWaiting = true
             session.activityBytes = 0
-            this.emit('input-waiting', id)
+            // Check the interpreted on-screen lines, not the last 5 raw chunks —
+            // TUI redraws (spinners, etc.) can push the prompt text out of a
+            // small sliding window even when the prompt is still visible.
+            const screenLines = this.extractRecentLines(session, 50)
+            const isAtPrompt = screenLines.some((l) =>
+              INSTANT_PROMPT_PATTERNS.some((p) => p.test(l))
+            )
+            this.emit('input-waiting', id, isAtPrompt)
           }
         })
       }
@@ -331,17 +344,16 @@ export class SessionManager extends EventEmitter {
         } catch { /* ignore */ }
       }
 
+      // Sticky: once we detect an instant prompt, keep inputWaiting=true until
+      // user input clears it (see writeToSession / submitCommand). Clearing
+      // based on a sliding window caused flicker while a prompt was still on
+      // screen but its text had scrolled out of the last 5 chunks, which let
+      // the idle path fire and incorrectly auto-advance the queue.
       const recent = session.outputBuffer.slice(-5).join('')
-      const wasWaiting = session.inputWaiting
-      const nowWaiting = detectInstantPrompt(recent)
-
-      if (!nowWaiting && wasWaiting) {
-        session.inputWaiting = false
-      }
-      if (nowWaiting && !wasWaiting) {
+      if (!session.inputWaiting && detectInstantPrompt(recent)) {
         session.inputWaiting = true
         session.activityBytes = 0
-        this.emit('input-waiting', meta.id)
+        this.emit('input-waiting', meta.id, true)
       }
     })
 

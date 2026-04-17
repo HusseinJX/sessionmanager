@@ -93,9 +93,20 @@ export class HttpApiServer {
         if (done) this.pushSse('task-updated', { projectId: project.id, task: done })
       }
     })
-    this.sessionManager.on('input-waiting', (sessionId: string) => {
+    this.sessionManager.on('input-waiting', (sessionId: string, isInstant: boolean) => {
       this.pushSse('input-waiting', { sessionId })
-      this.advanceQueue(sessionId)
+      console.log(`[queue] input-waiting session=${sessionId} isInstant=${isInstant}`)
+      if (isInstant) {
+        const projects = getProjects()
+        const project = projects.find((p) => p.sessions.some((s) => s.id === sessionId))
+        const session = project?.sessions.find((s) => s.id === sessionId)
+        console.log(`[queue] instant prompt, queueRunning=${session?.queueRunning}`)
+        if (session?.queueRunning) {
+          this.sessionManager.submitCommand(sessionId, '')
+        }
+      } else {
+        this.advanceQueue(sessionId)
+      }
     })
     this.sessionManager.on('cwd', (sessionId: string, cwd: string) => {
       this.pushSse('cwd', { sessionId, cwd })
@@ -112,6 +123,7 @@ export class HttpApiServer {
     const tasks = getTasksForProject(project.id)
 
     const inProgress = tasks.find((t) => t.assignedSessionId === sessionId && t.status === 'in-progress')
+    console.log(`[queue] advanceQueue inProgress=${inProgress?.title ?? 'none'}`)
     if (inProgress) {
       const done = updateTask(project.id, inProgress.id, { status: 'done', completedAt: Date.now() })
       if (done) this.pushSse('task-updated', { projectId: project.id, task: done })
@@ -127,7 +139,9 @@ export class HttpApiServer {
       return
     }
 
-    this.sessionManager.submitCommand(sessionId, next.command ?? next.title)
+    const cmd = next.command ?? next.title
+    console.log(`[queue] submitting next task: "${cmd}"`)
+    this.sessionManager.submitCommand(sessionId, cmd)
     const updated = updateTask(project.id, next.id, { status: 'in-progress' })
     if (updated) this.pushSse('task-updated', { projectId: project.id, task: updated })
   }

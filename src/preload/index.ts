@@ -21,6 +21,7 @@ export interface TerminalExitEvent {
 
 export interface TerminalInputWaitingEvent {
   id: string
+  isInstant?: boolean
 }
 
 type OutputCallback = (event: TerminalOutputEvent) => void
