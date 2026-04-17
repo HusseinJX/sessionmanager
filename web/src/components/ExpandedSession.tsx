@@ -270,7 +270,8 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
   const handleClose = useCallback(() => {
     setExpandedSession(null)
-  }, [setExpandedSession])
+    if (ownerProject) setProjectViewMode(ownerProject.id, 'terminals')
+  }, [setExpandedSession, ownerProject, setProjectViewMode])
 
   const handleSwitchSession = (id: string) => {
     setActiveSessionId(id)

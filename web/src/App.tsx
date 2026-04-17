@@ -15,6 +15,7 @@ export default function App() {
     connected,
     error,
     expandedSessionId,
+    setExpandedSession,
     activeProjectId,
     projectViewMode,
     setProjectViewMode,
@@ -188,9 +189,16 @@ export default function App() {
     <div className="flex flex-col h-screen bg-bg-base text-text-primary overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-bg-card border-b border-border-subtle">
-        <span className="text-sm font-semibold text-text-primary select-none pl-1">
+        <button
+          className="text-sm font-semibold text-text-primary select-none pl-1 hover:text-accent-green transition-colors"
+          onClick={() => {
+            setExpandedSession(null)
+            if (activeProjectId) setProjectViewMode(activeProjectId, 'terminals')
+          }}
+          title="Go to project view"
+        >
           SessionManager
-        </span>
+        </button>
         <div className="flex items-center gap-2">
           {connected ? (
             <span className="flex items-center gap-1 text-xs text-accent-green">

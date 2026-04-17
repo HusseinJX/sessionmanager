@@ -12,6 +12,7 @@ export default function PlannerBoard(): React.ReactElement {
   const {
     projects,
     activeProjectId,
+    sessionStates,
     addTaskToProject,
     updateTaskInProject,
     removeTaskFromProject,
@@ -158,11 +159,15 @@ export default function PlannerBoard(): React.ReactElement {
             }
           }}
         >
-          {sessions.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.parentSessionId ? `Runner: ${s.name}` : s.name}
-            </option>
-          ))}
+          {sessions.map((s) => {
+            const liveCwd = sessionStates[s.id]?.currentCwd ?? s.cwd ?? ''
+            const label = liveCwd.split('/').filter(Boolean).pop() ?? s.name
+            return (
+              <option key={s.id} value={s.id}>
+                {s.parentSessionId ? `Runner: ${label}` : label}
+              </option>
+            )
+          })}
         </select>
         {selectedSessionId && (() => {
           const selectedSession = sessions.find((s) => s.id === selectedSessionId)

@@ -109,7 +109,8 @@ export default function FullTerminal({ sessionId }: FullTerminalProps): React.Re
 
   const handleClose = useCallback((): void => {
     setExpandedSession(null)
-  }, [setExpandedSession])
+    if (ownerProject) setProjectViewMode(ownerProject.id, 'terminals')
+  }, [setExpandedSession, ownerProject, setProjectViewMode])
 
   const handleSendCommand = useCallback((): void => {
     if (!cmdInput) return
