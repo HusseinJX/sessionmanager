@@ -1035,3 +1035,18 @@ Replaced the per-task ▶ button on planner cards with a single queue toggle in 
 Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before forwarding to the pty.
 
 **Deploy:** Web bundle rebuilt (`index-CWzv5rTD.js`), rsynced to `64.23.191.7`, `sessionmanager` service restarted.
+
+---
+
+## Checkpoint — Live CWD name propagation fix (all views)
+
+**Problem:** Terminal names (derived from current working directory) weren't updating in real-time after `cd` in three views: project grid (TerminalCard), expanded terminal sidebar/runners (ExpandedSession), and planner dropdown (PlannerBoard). The last commit had fixed ExpandedSession's main title via a local SSE listener, but the store-based path used by all other locations wasn't triggering re-renders reliably.
+
+**Fix:** Instead of depending on the App.tsx→store→Zustand re-render chain, we now use a `sm-cwd` browser `CustomEvent` as a lightweight broadcast bus:
+
+- **App.tsx**: dispatches `window.dispatchEvent(new CustomEvent('sm-cwd', { detail: { sessionId, cwd } }))` whenever the SSE `cwd` event fires (in addition to calling `updateSessionCwd` for the store).
+- **TerminalCard**: adds a `useEffect` that subscribes to `sm-cwd` and maintains `localCwd` state for its session. Falls back to store/prop values for initial render.
+- **PlannerBoard**: adds `liveCwds: Record<string, string>` state, updated by `sm-cwd` events. Dropdown options use `liveCwds[s.id] ?? store ?? prop`.
+- **ExpandedSession**: replaced single `liveCwd` + SSE-based `handleCwd` with `liveCwds` map subscribed to `sm-cwd`. Now covers main title, sidebar primary label, runner labels, and the "add runner" CWD seed — all update live on `cd`.
+
+**Build:** `web/` rebuilt cleanly (`tsc` + vite).
