@@ -210,6 +210,26 @@ function getZshIntegrationDir(): string {
   return dir
 }
 
+let _bashIntegrationFile: string | null = null
+function getBashIntegrationFile(): string {
+  const dir = path.join(os.tmpdir(), 'sessionmanager-bash-integration')
+  const file = path.join(dir, 'bash-init.sh')
+  if (_bashIntegrationFile && fs.existsSync(file)) return _bashIntegrationFile
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(file, [
+    '[ -f /etc/bash.bashrc ] && source /etc/bash.bashrc 2>/dev/null || true',
+    '[ -f /etc/profile ] && source /etc/profile 2>/dev/null || true',
+    '[ -f ~/.bash_profile ] && source ~/.bash_profile 2>/dev/null ||',
+    '  { [ -f ~/.bash_login ] && source ~/.bash_login 2>/dev/null; } ||',
+    '  { [ -f ~/.profile ] && source ~/.profile 2>/dev/null; }',
+    '[ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null || true',
+    '_sm_osc7() { printf "\\e]7;file://%s%s\\a" "${HOSTNAME:-localhost}" "${PWD}"; }',
+    'PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND%; }; }_sm_osc7"',
+  ].join('\n') + '\n')
+  _bashIntegrationFile = file
+  return file
+}
+
 function resolveHome(p: string): string {
   if (p.startsWith('~')) return path.join(os.homedir(), p.slice(1))
   return p
@@ -270,10 +290,18 @@ export class SessionManager extends EventEmitter {
     if (!fs.existsSync(cwd)) cwd = os.homedir()
 
     const shell = getDefaultShell()
-    const args: string[] = []
-    if (process.platform !== 'win32') args.push('-l')
-
     const isZsh = shell.endsWith('/zsh') || shell === 'zsh'
+    const isBash = !isZsh && (shell.endsWith('/bash') || shell === 'bash')
+
+    const args: string[] = []
+    if (process.platform !== 'win32') {
+      if (isBash) {
+        args.push('--init-file', getBashIntegrationFile())
+      } else {
+        args.push('-l')
+      }
+    }
+
     const env: Record<string, string | undefined> = {
       ...process.env,
       TERM: 'xterm-256color',
