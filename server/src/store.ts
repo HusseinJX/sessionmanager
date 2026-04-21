@@ -71,10 +71,17 @@ function save(): void {
 
 export function getProjects(): ProjectConfig[] {
   const projects = store().projects
-  // Backfill tasks array for projects created before task feature
+  let dirty = false
   for (const p of projects) {
-    if (!p.tasks) p.tasks = []
+    // Backfill tasks array for projects created before task feature
+    if (!p.tasks) { p.tasks = []; dirty = true }
+    // Remove runners whose parent session no longer exists in this project
+    const sessionIds = new Set(p.sessions.map((s) => s.id))
+    const before = p.sessions.length
+    p.sessions = p.sessions.filter((s) => !s.parentSessionId || sessionIds.has(s.parentSessionId))
+    if (p.sessions.length !== before) dirty = true
   }
+  if (dirty) save()
   return projects
 }
 

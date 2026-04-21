@@ -64,6 +64,7 @@ async function writeHistoryCache(entry: HistoryCacheEntry): Promise<void> {
 function SidebarItem({
   label,
   sublabel,
+  badge,
   status,
   inputWaiting,
   isActive,
@@ -73,6 +74,7 @@ function SidebarItem({
 }: {
   label: string
   sublabel?: string
+  badge?: string
   status: string
   inputWaiting: boolean
   isActive: boolean
@@ -96,6 +98,11 @@ function SidebarItem({
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotColor}`} />
+        {badge && (
+          <span className="font-mono text-[9px] font-bold text-accent-green bg-accent-green/10 border border-accent-green/30 rounded px-1 py-px flex-shrink-0 select-none">
+            {badge}
+          </span>
+        )}
         <span className={`text-xs truncate flex-1 ${isActive ? 'text-text-primary font-medium' : 'text-text-muted'}`}>
           {label}
         </span>
@@ -746,9 +753,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     ?? sessionState?.currentCwd
     ?? (activeSessionId === sessionId ? primarySession?.currentCwd ?? primarySession?.cwd : runners.find((r) => r.id === activeSessionId)?.cwd)
     ?? ''
-  const displayName = activeCwd.split('/').filter(Boolean).pop()
-    ?? (activeSessionId === sessionId ? primarySession?.name : 'runner')
-    ?? activeSessionId
+  const displayName = activeCwd.replace(/^~/, '/home').split('/').filter(Boolean).pop() ?? '~'
   const displayCwd = activeCwd
     .replace(/^\/Users\/[^/]+/, '~')
     .replace(/^\/home\/[^/]+/, '~')
@@ -756,8 +761,15 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   const activeHasNotes = Boolean(activeSessionConfig?.notes?.trim())
 
   const primaryLiveCwd = liveCwds[sessionId] ?? sessionStates[sessionId]?.currentCwd ?? primarySession?.cwd ?? ''
-  const primaryLabel = primaryLiveCwd.split('/').filter(Boolean).pop() ?? primarySession?.name ?? 'Terminal'
+  const primaryLabel = primaryLiveCwd.replace(/^~/, '/home').split('/').filter(Boolean).pop() ?? '~'
   const primarySublabel = primaryLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
+
+  // Position-based badges (1, 2, 3…) for all sessions in the project
+  const sessionBadge = (id: string) => {
+    const idx = ownerProject?.sessions.findIndex((s) => s.id === id) ?? -1
+    return idx >= 0 ? String(idx + 1) : undefined
+  }
+  const activeBadge = sessionBadge(activeSessionId)
 
   return (
     <div className="absolute inset-0 bg-bg-base flex z-10">
@@ -776,9 +788,9 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
             <div className="h-4 w-px bg-border-subtle flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               <div className="flex items-center gap-2 min-w-0">
-                {activeSessionConfig?.label && (
+                {(activeSessionConfig?.label ?? activeBadge) && (
                   <span className="font-mono text-[10px] font-bold text-accent-green bg-accent-green/10 border border-accent-green/30 rounded px-1 py-0.5 flex-shrink-0 select-none">
-                    {activeSessionConfig.label}
+                    {activeSessionConfig?.label ?? activeBadge}
                   </span>
                 )}
                 <span className="text-sm font-medium text-text-primary truncate">{displayName}</span>
@@ -898,6 +910,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
         <SidebarItem
           label={primaryLabel}
           sublabel={primarySublabel !== primaryLabel ? primarySublabel : undefined}
+          badge={primarySession?.label ?? sessionBadge(sessionId)}
           status={sessionStates[sessionId]?.status ?? 'running'}
           inputWaiting={sessionStates[sessionId]?.inputWaiting ?? false}
           isActive={activeSessionId === sessionId}
@@ -919,13 +932,14 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
         {runners.map((r) => {
           const rState = sessionStates[r.id]
           const rLiveCwd = liveCwds[r.id] ?? rState?.currentCwd ?? r.cwd
-          const rLabel = rLiveCwd.split('/').filter(Boolean).pop() ?? 'runner'
+          const rLabel = rLiveCwd.replace(/^~/, '/home').split('/').filter(Boolean).pop() ?? '~'
           const rSublabel = rLiveCwd.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~')
           return (
             <SidebarItem
               key={r.id}
               label={rLabel}
               sublabel={rSublabel !== rLabel ? rSublabel : undefined}
+              badge={r.label ?? sessionBadge(r.id)}
               status={rState?.status ?? 'running'}
               inputWaiting={rState?.inputWaiting ?? false}
               isActive={activeSessionId === r.id}

@@ -40,9 +40,10 @@ function StatusBadge({ status, inputWaiting }: { status: string; inputWaiting: b
 interface TerminalCardProps {
   session: SessionStatus
   projectId: string
+  autoLabel?: string
 }
 
-export default function TerminalCard({ session, projectId }: TerminalCardProps) {
+export default function TerminalCard({ session, projectId, autoLabel }: TerminalCardProps) {
   const {
     sessionStates,
     setExpandedSession,
@@ -75,7 +76,7 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
   }, [session.id])
   const liveCwd = localCwd ?? runtimeState?.currentCwd ?? session.currentCwd ?? session.cwd
   const previewLines = runtimeState?.previewLines ?? session.recentLines ?? []
-  const liveDisplayName = liveCwd.split('/').filter(Boolean).pop() ?? session.name
+  const liveDisplayName = liveCwd.replace(/^~/, '/home').split('/').filter(Boolean).pop() ?? '~'
 
   const cwdDisplay = liveCwd
     .replace(/^\/Users\/[^/]+/, '~')
@@ -193,12 +194,17 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
         onClick={() => setExpandedSession(session.id)}
       >
         <div className="flex items-center gap-2 min-w-0">
-          {session.label && (
+          {(session.label ?? autoLabel) && (
             <span className="font-mono text-[10px] font-bold text-accent-green bg-accent-green/10 border border-accent-green/30 rounded px-1 py-0.5 flex-shrink-0 select-none">
-              {session.label}
+              {session.label ?? autoLabel}
             </span>
           )}
-          <span className="text-sm font-medium text-text-primary truncate">{liveDisplayName}</span>
+          <span className="text-sm font-medium text-text-primary truncate">
+            {liveDisplayName}
+            {session.claudePrompt && (
+              <span className="text-text-muted font-normal"> / {session.claudePrompt}</span>
+            )}
+          </span>
           <button
             className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"
             title="Open planner filtered to this terminal"

@@ -154,7 +154,17 @@ export class TelegramBridge {
 
       // Reply to a shorthand or input-waiting message → send as command to that terminal
       if (msg.reply_to_message) {
-        const sessionId = messageToSession.get(msg.reply_to_message.message_id)
+        let sessionId = messageToSession.get(msg.reply_to_message.message_id)
+
+        // Fallback: hook messages aren't tracked in messageToSession but include a [A1] label
+        if (!sessionId && msg.reply_to_message.text) {
+          const labelMatch = msg.reply_to_message.text.match(/^\[([a-zA-Z])(\d+)\]/)
+          if (labelMatch) {
+            const resolved = this.resolveShorthand(labelMatch[1].toLowerCase(), parseInt(labelMatch[2], 10))
+            if (typeof resolved !== 'string') sessionId = resolved.session.id
+          }
+        }
+
         if (sessionId && this.bot) {
           const isBareKey = /^\d$/.test(msg.text.trim())
           if (isBareKey) {

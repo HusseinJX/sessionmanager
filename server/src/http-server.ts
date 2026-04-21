@@ -6,17 +6,23 @@ import * as os from 'os'
 import type { SessionManager } from './session-manager'
 import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, setSessionQueueRunning } from './store'
 
-// Compute a short label like "A1", "B3" for a session.
-// Pass sessionId=null when called before the session is added (uses future position = current count + 1).
-function computeSessionLabel(projectId: string, sessionId: string | null): string {
+// Compute a short label like "A1", "A2" for a top-level session (runners excluded from count).
+function computeSessionLabel(projectId: string): string {
   const projects = getProjects()
   const projectIdx = projects.findIndex((p) => p.id === projectId)
   const projectLetter = String.fromCharCode(65 + Math.min(Math.max(projectIdx, 0), 25))
   const project = projects[projectIdx]
-  const sessionNumber = sessionId
-    ? (project?.sessions.findIndex((s) => s.id === sessionId) ?? 0) + 1
-    : (project?.sessions.length ?? 0) + 1
-  return `${projectLetter}${sessionNumber}`
+  const topLevelCount = (project?.sessions.filter((s) => !s.parentSessionId).length ?? 0) + 1
+  return `${projectLetter}${topLevelCount}`
+}
+
+// Compute a runner label like "A1-R1" based on parent label and runner count.
+function computeRunnerLabel(projectId: string, parentSessionId: string): string {
+  const project = getProjects().find((p) => p.id === projectId)
+  const parent = project?.sessions.find((s) => s.id === parentSessionId)
+  const parentLabel = parent?.label ?? 'A1'
+  const runnerCount = (project?.sessions.filter((s) => s.parentSessionId === parentSessionId).length ?? 0) + 1
+  return `${parentLabel}-R${runnerCount}`
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -296,15 +302,29 @@ export class HttpApiServer {
       const projects = getProjects()
       const statuses = this.sessionManager.getAllSessionsStatus()
       const statusMap = new Map(statuses.map((s) => [s.id, s]))
-      const result = projects.map((p) => ({
-        id: p.id,
-        name: p.name,
-        sessions: p.sessions.map((s) => ({
-          ...s,
-          ...(statusMap.get(s.id) ?? {}),
-          parentSessionId: s.parentSessionId,
-        })),
-      }))
+      const result = projects.map((p, projectIdx) => {
+        const projectLetter = String.fromCharCode(65 + Math.min(projectIdx, 25))
+        // Compute labels dynamically so they're always sequential regardless of stored values
+        const labelMap = new Map<string, string>()
+        const mainSessions = p.sessions.filter((s) => !s.parentSessionId)
+        mainSessions.forEach((s, i) => labelMap.set(s.id, `${projectLetter}${i + 1}`))
+        p.sessions.filter((s) => s.parentSessionId).forEach((s) => {
+          const parentLabel = labelMap.get(s.parentSessionId!) ?? projectLetter
+          const siblings = p.sessions.filter((r) => r.parentSessionId === s.parentSessionId)
+          const runnerIdx = siblings.indexOf(s) + 1
+          labelMap.set(s.id, `${parentLabel}-R${runnerIdx}`)
+        })
+        return {
+          id: p.id,
+          name: p.name,
+          sessions: p.sessions.map((s) => ({
+            ...s,
+            ...(statusMap.get(s.id) ?? {}),
+            parentSessionId: s.parentSessionId,
+            label: labelMap.get(s.id),
+          })),
+        }
+      })
       this.json(res, 200, result)
       return
     }
@@ -333,7 +353,9 @@ export class HttpApiServer {
           if (!name || !cwd) return this.json(res, 400, { error: 'name and cwd required' })
           const projectId = sessionCreateMatch[1]
           // Compute label before adding so we know the session's future index
-          const label = parentSessionId ? undefined : computeSessionLabel(projectId, null)
+          const label = parentSessionId
+            ? computeRunnerLabel(projectId, parentSessionId)
+            : computeSessionLabel(projectId)
           const session = addSession(projectId, { name, cwd, command, parentSessionId, label })
           const project = getProjects().find((p) => p.id === projectId)
           // Start the pty
@@ -345,6 +367,7 @@ export class HttpApiServer {
             projectId,
             projectName: project?.name,
             label: session.label,
+            parentSessionId: session.parentSessionId,
             status: 'running',
           })
           this.pushSse('session-created', { projectId, session })

@@ -36,6 +36,7 @@ export interface SessionStatus {
   exitCode?: number
   inputWaiting: boolean
   recentLines: string[]
+  claudePrompt?: string
 }
 
 interface PtySession {
@@ -463,7 +464,8 @@ export class SessionManager extends EventEmitter {
         status: session.meta.status,
         exitCode: session.meta.exitCode,
         inputWaiting: session.inputWaiting,
-        recentLines: this.extractRecentLines(session, 5)
+        recentLines: this.extractRecentLines(session, 5),
+        claudePrompt: this.extractFirstClaudePrompt(session),
       })
     }
     return result
@@ -473,6 +475,21 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id)
     if (!session) return null
     return this.extractRecentLines(session, n)
+  }
+
+  private extractFirstClaudePrompt(session: PtySession): string | undefined {
+    if (!session.meta.command?.match(/\bclaude\b/)) return undefined
+    // Check for inline prompt: claude -p "..." or claude --prompt "..."
+    const cmdMatch = session.meta.command.match(/(?:-p|--prompt)\s+["']?([^"'\n]+)["']?/)
+    if (cmdMatch) return cmdMatch[1].trim().slice(0, 80)
+    // Scan stripped output for first human-turn line (Claude Code TUI renders them with "> " prefix)
+    const raw = session.outputBuffer.join('')
+    const stripped = stripAnsiForExport(raw)
+    for (const line of stripped.split(/\r?\n/)) {
+      const t = line.trim()
+      if (t.startsWith('> ') && t.length > 2) return t.slice(2).trim().slice(0, 80)
+    }
+    return undefined
   }
 
   private extractRecentLines(session: PtySession, n: number): string[] {

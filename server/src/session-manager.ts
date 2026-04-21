@@ -16,6 +16,7 @@ export interface SessionMeta {
   projectId: string
   projectName?: string
   label?: string
+  parentSessionId?: string
   status: 'running' | 'exited'
   exitCode?: number
 }
@@ -26,12 +27,15 @@ export interface SessionStatus {
   cwd: string
   currentCwd?: string
   command?: string
+  label?: string
+  parentSessionId?: string
   projectId: string
   projectName?: string
   status: 'running' | 'exited'
   exitCode?: number
   inputWaiting: boolean
   recentLines: string[]
+  claudePrompt?: string
 }
 
 const MAX_HISTORY_BYTES = 2 * 1024 * 1024  // 2MB raw PTY history for xterm.js replay
@@ -541,12 +545,15 @@ export class SessionManager extends EventEmitter {
         cwd: session.meta.cwd,
         currentCwd: session.currentCwd,
         command: session.meta.command,
+        label: session.meta.label,
+        parentSessionId: session.meta.parentSessionId,
         projectId: session.meta.projectId,
         projectName: session.meta.projectName,
         status: session.meta.status,
         exitCode: session.meta.exitCode,
         inputWaiting: session.inputWaiting,
         recentLines: this.extractRecentLines(session, 5),
+        claudePrompt: this.extractFirstClaudePrompt(session),
       })
     }
     return result
@@ -565,6 +572,19 @@ export class SessionManager extends EventEmitter {
     const deltaChunks = session.outputBuffer.slice(session.lastWriteBufferIdx)
     if (deltaChunks.length === 0) return []
     return this.extractLinesFromChunks(deltaChunks, n)
+  }
+
+  private extractFirstClaudePrompt(session: PtySession): string | undefined {
+    if (!session.meta.command?.match(/\bclaude\b/)) return undefined
+    const cmdMatch = session.meta.command.match(/(?:-p|--prompt)\s+["']?([^"'\n]+)["']?/)
+    if (cmdMatch) return cmdMatch[1].trim().slice(0, 80)
+    const raw = session.outputBuffer.join('')
+    const stripped = stripAnsi(raw)
+    for (const line of stripped.split(/\r?\n/)) {
+      const t = line.trim()
+      if (t.startsWith('> ') && t.length > 2) return t.slice(2).trim().slice(0, 80)
+    }
+    return undefined
   }
 
   private extractRecentLines(session: PtySession, n: number): string[] {

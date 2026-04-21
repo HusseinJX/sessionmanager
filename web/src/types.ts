@@ -17,6 +17,7 @@ export interface SessionStatus extends SessionConfig {
   exitCode?: number
   inputWaiting: boolean
   recentLines: string[]
+  claudePrompt?: string
 }
 
 export interface Project {

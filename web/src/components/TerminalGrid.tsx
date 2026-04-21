@@ -20,9 +20,8 @@ async function quickCreateSession(projectId: string) {
   if (!config) return
   const projects = await fetchProjects(config)
   const project = projects.find((p) => p.id === projectId)
-  const count = project?.sessions.length ?? 0
   await createSession(config, projectId, {
-    name: `Terminal ${count + 1}`,
+    name: 'terminal',
     cwd: '~',
   })
   const updated = await fetchProjects(config)
@@ -80,8 +79,8 @@ export default function TerminalGrid() {
         className="grid gap-2 sm:gap-3"
         style={{ gridTemplateColumns: getGridTemplate(layoutMode) }}
       >
-        {sessions.map((session) => (
-          <TerminalCard key={session.id} session={session} projectId={project.id} />
+        {sessions.map((session, i) => (
+          <TerminalCard key={session.id} session={session} projectId={project.id} autoLabel={String(i + 1)} />
         ))}
         <button
           className="flex items-center justify-center min-h-[120px] border border-dashed border-border-subtle rounded-lg text-text-muted hover:text-accent-green hover:border-accent-green transition-colors"
