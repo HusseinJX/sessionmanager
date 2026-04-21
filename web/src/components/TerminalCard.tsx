@@ -257,19 +257,17 @@ export default function TerminalCard({ session, projectId }: TerminalCardProps) 
 
       {/* Log preview */}
       <div
-        className="cursor-pointer px-2 py-1.5 flex-1"
-        style={{ height: window.innerWidth < 640 ? 120 : 180, background: '#0d1117', overflow: 'hidden' }}
+        className="cursor-pointer px-2 py-1.5 h-[120px] sm:h-[180px] flex-shrink-0 bg-bg-base overflow-hidden"
         onClick={() => setExpandedSession(session.id)}
       >
         <div className="space-y-px">
           {previewLines.length === 0 ? (
-            <span className="font-mono text-xs" style={{ color: '#484f58' }}>no output yet</span>
+            <span className="font-mono text-xs text-text-muted">no output yet</span>
           ) : (
             previewLines.map((line, i) => (
               <div
                 key={i}
-                className="font-mono text-xs whitespace-pre-wrap break-words leading-relaxed"
-                style={{ color: '#c9d1d9' }}
+                className="font-mono text-xs whitespace-pre-wrap break-words leading-[1.4] text-text-primary"
               >
                 {line}
               </div>

@@ -855,8 +855,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
         {/* xterm.js terminal */}
         <div
           ref={containerRef}
-          className={`flex-1 overflow-hidden p-1 transition-colors ${dragOver ? 'ring-2 ring-inset ring-accent-blue' : ''}`}
-          style={{ background: '#0d1117' }}
+          className={`flex-1 overflow-hidden p-1 bg-bg-base transition-colors ${dragOver ? 'ring-2 ring-inset ring-accent-blue' : ''}`}
           onClick={() => terminalRef.current?.focus()}
           onDragOver={handleTermDragOver}
           onDragLeave={handleTermDragLeave}
