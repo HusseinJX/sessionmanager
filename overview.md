@@ -1078,3 +1078,12 @@ Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before f
 **Fix:** Install `terser` and switch `build.minify` to `'terser'` in `web/vite.config.ts`. Terser emits `let i; var r; (r = i || (i = {}))...` — correct. Bundle rebuilt as `index-Dk2-vidh.js`, rsynced to droplet. No server restart.
 
 **Files changed:** `web/vite.config.ts`, `web/package.json` (terser dev dep).
+
+---
+
+## Checkpoint — Mobile paste button in expanded terminal
+**Problem:** On mobile, the expanded xterm view had no way to paste clipboard text. xterm.js's hidden textarea can't be long-pressed on iOS, and `MobileKeybar` only had modifier/arrow keys.
+
+**Fix:** Added a **Paste** button to `MobileKeybar` in `web/src/components/ExpandedSession.tsx` (between Tab and the arrow-key group). It calls `navigator.clipboard.readText()` and sends the text straight into the terminal via `onSend`. If the Clipboard API is unavailable or permission is denied, falls back to `window.prompt` so the user can paste manually.
+
+**Files changed:** `web/src/components/ExpandedSession.tsx`.

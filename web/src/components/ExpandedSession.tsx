@@ -194,6 +194,23 @@ function MobileKeybar({
       >
         Tab
       </button>
+      <button
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={async () => {
+          try {
+            const text = await navigator.clipboard.readText()
+            if (text) onSend(text)
+          } catch {
+            const text = window.prompt('Paste text to send:')
+            if (text) onSend(text)
+          }
+          clearMods()
+        }}
+        className="px-2.5 py-2 rounded text-xs font-medium bg-bg-overlay text-text-muted border border-border-subtle active:bg-bg-overlay/80 transition-all select-none"
+        title="Paste clipboard text into terminal"
+      >
+        Paste
+      </button>
 
       <div className="w-px h-6 bg-border-subtle mx-0.5" />
 
