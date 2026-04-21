@@ -429,7 +429,7 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   const handleAddRunner = async () => {
     if (!ownerProject || !config) return
     const cwd = liveCwds[activeSessionId] ?? sessionStates[activeSessionId]?.currentCwd ?? primarySession?.cwd ?? '~'
-    const name = cwd.split('/').filter(Boolean).pop() ?? 'runner'
+    const name = 'untitled'
     const created = await createSession(config, ownerProject.id, {
       name,
       cwd,

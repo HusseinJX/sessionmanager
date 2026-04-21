@@ -21,7 +21,7 @@ async function quickCreateSession(projectId: string) {
   const projects = await fetchProjects(config)
   const project = projects.find((p) => p.id === projectId)
   await createSession(config, projectId, {
-    name: 'terminal',
+    name: 'untitled',
     cwd: '~',
   })
   const updated = await fetchProjects(config)
@@ -32,7 +32,7 @@ async function quickStart() {
   const { config, setProjects, setActiveProject } = useAppStore.getState()
   if (!config) return
   const project = await createProject(config, 'Default')
-  await createSession(config, project.id, { name: 'Terminal 1', cwd: '~' })
+  await createSession(config, project.id, { name: 'untitled', cwd: '~' })
   const updated = await fetchProjects(config)
   setProjects(updated)
   setActiveProject(project.id)
