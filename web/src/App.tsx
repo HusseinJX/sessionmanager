@@ -104,6 +104,7 @@ export default function App() {
       if (!mounted) return
       const { sessionId, data } = JSON.parse(e.data) as { sessionId: string; data: string }
       appendOutput(sessionId, data)
+      window.dispatchEvent(new CustomEvent('sm-output', { detail: { sessionId, data } }))
     })
 
     es.addEventListener('status', (e: MessageEvent<string>) => {

@@ -524,29 +524,23 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
       })
       .catch(() => {})
 
-    // Listen to SSE output events for this session
-    // We tap into the existing EventSource via a custom event on window
-    // Instead, we'll create a secondary listener approach:
-    // The App.tsx SSE already calls appendOutput which updates the store.
-    // But for xterm.js we need the RAW data. We'll listen to the SSE directly.
-    const esUrl = `${config.url}/api/events?token=${encodeURIComponent(config.token)}`
-    const es = new EventSource(esUrl)
-
-    const handleOutput = (e: MessageEvent<string>) => {
-      const { sessionId: sid, data } = JSON.parse(e.data) as { sessionId: string; data: string }
+    // Receive raw PTY bytes piped from App.tsx's single SSE via window event.
+    // Avoids opening a second EventSource (which previously died silently and
+    // left the expanded view frozen while the grid kept updating).
+    const handleOutput = (e: Event) => {
+      const { sessionId: sid, data } = (e as CustomEvent<{ sessionId: string; data: string }>).detail
       if (sid === activeSessionId) {
         term.write(data)
       }
     }
-    es.addEventListener('output', handleOutput)
+    window.addEventListener('sm-output', handleOutput)
 
     setTimeout(() => term.focus(), 50)
 
     return () => {
       xtermTextarea?.removeEventListener('beforeinput', blockAltInput as EventListener, true)
       xtermTextarea?.removeEventListener('paste', handleImagePaste as unknown as EventListener, true)
-      es.removeEventListener('output', handleOutput)
-      es.close()
+      window.removeEventListener('sm-output', handleOutput)
       observer.disconnect()
       try { fitAddon.dispose() } catch { /* ignore */ }
       try { term.dispose() } catch { /* ignore */ }

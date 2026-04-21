@@ -1050,3 +1050,19 @@ Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before f
 - **ExpandedSession**: replaced single `liveCwd` + SSE-based `handleCwd` with `liveCwds` map subscribed to `sm-cwd`. Now covers main title, sidebar primary label, runner labels, and the "add runner" CWD seed — all update live on `cd`.
 
 **Build:** `web/` rebuilt cleanly (`tsc` + vite).
+
+---
+
+## Checkpoint — Fix frozen expanded terminal on deployed web UI
+
+**Problem:** On the deployed web UI (`64.23.191.7`), after expanding a terminal and leaving it open, the xterm.js view would freeze on an old frame (e.g. Claude's trust dialog) while the grid card for the same session kept updating with new output. Telegram input-waiting notifications also kept firing, confirming the pty and server emit path were healthy. Refreshing + re-expanding did not recover the stream.
+
+**Root cause:** `ExpandedSession` was opening a **second, independent** `EventSource` to `/api/events` (in addition to the one `App.tsx` maintains for the whole app). That second SSE had no `onerror` handler and no visibility, so when it died silently — likely due to the Node HTTPS server + Caddy idle/proxy behavior — the expanded view stopped receiving `output` events. The main app's SSE stayed alive, which is why the grid kept updating. There was also a latent race between `fetchHistory` and the second SSE subscribe that could drop any chunks emitted during the gap.
+
+**Fix:** Consolidate to a single SSE. `App.tsx`'s SSE `output` handler now also re-broadcasts raw PTY bytes via `window.dispatchEvent(new CustomEvent('sm-output', { detail: { sessionId, data } }))`. `ExpandedSession` replaces its internal `new EventSource(...)` + `es.addEventListener('output', …)` with a `window.addEventListener('sm-output', …)` that filters by `activeSessionId` and calls `term.write(data)`. Mirrors the existing `sm-cwd` event-bus pattern.
+
+**Files changed:**
+- `web/src/App.tsx` — dispatch `sm-output` CustomEvent in the SSE `output` listener.
+- `web/src/components/ExpandedSession.tsx` — remove the duplicate `EventSource`; subscribe to the window `sm-output` event instead.
+
+**Deploy:** Web bundle rebuilt (`index-BbDePMgK.js`), rsynced to `/opt/sessionmanager/web/dist/` on `64.23.191.7`. No server restart required (server code unchanged).
