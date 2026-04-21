@@ -159,14 +159,18 @@ export async function sendInput(
 
 export async function fetchHistory(
   config: ServerConfig,
-  sessionId: string
-): Promise<string> {
+  sessionId: string,
+  after?: number
+): Promise<{ data: string; totalBytes: number }> {
+  const qs = typeof after === 'number' && after > 0 ? `?after=${after}` : ''
   const res = await fetch(
-    `${config.url}/api/sessions/${encodeURIComponent(sessionId)}/history`,
+    `${config.url}/api/sessions/${encodeURIComponent(sessionId)}/history${qs}`,
     { headers: { Authorization: `Bearer ${config.token}` } }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return res.text()
+  const data = await res.text()
+  const totalBytes = parseInt(res.headers.get('X-Sm-Total-Bytes') || '0', 10) || 0
+  return { data, totalBytes }
 }
 
 export async function resizeSession(

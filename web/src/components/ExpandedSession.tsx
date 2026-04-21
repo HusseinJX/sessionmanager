@@ -15,6 +15,52 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
+// IndexedDB-backed cache of per-session raw PTY history. Avoids re-fetching
+// the full 2MB on every browser refresh: on mount we replay the cached
+// prefix into xterm, then ask the server only for bytes after our offset.
+// Server-issued `totalBytes` on each SSE chunk keeps our byte counter in sync.
+const HISTORY_DB = 'sm-history'
+const HISTORY_STORE = 'sessions'
+let _dbPromise: Promise<IDBDatabase> | null = null
+function openHistoryDb(): Promise<IDBDatabase> {
+  if (_dbPromise) return _dbPromise
+  _dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(HISTORY_DB, 1)
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(HISTORY_STORE, { keyPath: 'id' })
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+  return _dbPromise
+}
+interface HistoryCacheEntry { id: string; data: string; bytes: number; updatedAt: number }
+async function readHistoryCache(sessionId: string): Promise<HistoryCacheEntry | null> {
+  try {
+    const db = await openHistoryDb()
+    return await new Promise((resolve) => {
+      const tx = db.transaction(HISTORY_STORE, 'readonly')
+      const req = tx.objectStore(HISTORY_STORE).get(sessionId)
+      req.onsuccess = () => resolve((req.result as HistoryCacheEntry | undefined) ?? null)
+      req.onerror = () => resolve(null)
+    })
+  } catch {
+    return null
+  }
+}
+async function writeHistoryCache(entry: HistoryCacheEntry): Promise<void> {
+  try {
+    const db = await openHistoryDb()
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(HISTORY_STORE, 'readwrite')
+      tx.objectStore(HISTORY_STORE).put(entry)
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => resolve()
+      tx.onabort = () => resolve()
+    })
+  } catch { /* ignore */ }
+}
+
 function SidebarItem({
   label,
   sublabel,
@@ -557,32 +603,124 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     observer.observe(containerRef.current)
     observerRef.current = observer
 
-    // Load history then subscribe to live SSE output
-    fetchHistory(config, activeSessionId)
-      .then((history) => {
-        if (history) term.write(history)
+    // History loading with IndexedDB cache: replay whatever we had cached
+    // last time, then ask the server only for bytes after our known offset.
+    // This keeps refresh cheap even with a 2MB scrollback.
+    let cachedData = ''
+    let cachedBytes = 0
+    const sidAtMount = activeSessionId
+    ;(async () => {
+      const cached = await readHistoryCache(sidAtMount)
+      if (cached && sidAtMount === activeSessionId) {
+        cachedData = cached.data
+        cachedBytes = cached.bytes
+        if (cached.data) term.write(cached.data)
+      }
+      try {
+        const { data, totalBytes } = await fetchHistory(config, sidAtMount, cachedBytes)
+        if (sidAtMount !== activeSessionId) return
+        if (totalBytes < cachedBytes) {
+          // Server history shrank (log rotated / session recreated). Reset and
+          // use the server's view as the new baseline.
+          term.clear()
+          term.write(data)
+          cachedData = data
+          cachedBytes = totalBytes
+        } else if (data) {
+          term.write(data)
+          cachedData += data
+          cachedBytes = totalBytes
+        } else {
+          cachedBytes = totalBytes
+        }
         doFit()
-      })
-      .catch(() => {})
+        await writeHistoryCache({
+          id: sidAtMount,
+          data: cachedData,
+          bytes: cachedBytes,
+          updatedAt: Date.now(),
+        })
+      } catch { /* offline or auth — SSE will still populate */ }
+    })()
+
+    // Flush the cache at most once per second while output streams in.
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleFlush = () => {
+      if (flushTimer) return
+      flushTimer = setTimeout(() => {
+        flushTimer = null
+        writeHistoryCache({
+          id: sidAtMount,
+          data: cachedData,
+          bytes: cachedBytes,
+          updatedAt: Date.now(),
+        })
+      }, 1000)
+    }
 
     // Receive raw PTY bytes piped from App.tsx's single SSE via window event.
     // Avoids opening a second EventSource (which previously died silently and
     // left the expanded view frozen while the grid kept updating).
     const handleOutput = (e: Event) => {
-      const { sessionId: sid, data } = (e as CustomEvent<{ sessionId: string; data: string }>).detail
+      const { sessionId: sid, data, totalBytes } = (e as CustomEvent<{
+        sessionId: string; data: string; totalBytes?: number
+      }>).detail
       if (sid === activeSessionId) {
         term.write(data)
+        cachedData += data
+        if (typeof totalBytes === 'number') cachedBytes = totalBytes
+        scheduleFlush()
       }
     }
     window.addEventListener('sm-output', handleOutput)
+
+    // Touch-drag scrolling for mobile: translate vertical finger movement
+    // into xterm scrollback navigation. Only engages with a single finger
+    // and only preventDefault's when we actually scroll lines, so taps
+    // (focus) and pinch-zoom (two-finger) still work.
+    let touchLastY: number | null = null
+    const container = containerRef.current
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) { touchLastY = null; return }
+      touchLastY = e.touches[0].clientY
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      if (touchLastY == null || e.touches.length !== 1) return
+      const y = e.touches[0].clientY
+      const dy = y - touchLastY
+      const rowPx = (container?.clientHeight ?? term.rows * 18) / term.rows
+      const lines = Math.trunc(dy / rowPx)
+      if (lines !== 0) {
+        term.scrollLines(-lines)
+        touchLastY = y - (dy - lines * rowPx)
+        e.preventDefault()
+      }
+    }
+    const onTouchEnd = () => { touchLastY = null }
+    container?.addEventListener('touchstart', onTouchStart, { passive: true })
+    container?.addEventListener('touchmove', onTouchMove, { passive: false })
+    container?.addEventListener('touchend', onTouchEnd, { passive: true })
+    container?.addEventListener('touchcancel', onTouchEnd, { passive: true })
 
     setTimeout(() => term.focus(), 50)
 
     return () => {
       xtermTextarea?.removeEventListener('beforeinput', blockAltInput as EventListener, true)
       xtermTextarea?.removeEventListener('paste', handleImagePaste as unknown as EventListener, true)
+      container?.removeEventListener('touchstart', onTouchStart)
+      container?.removeEventListener('touchmove', onTouchMove)
+      container?.removeEventListener('touchend', onTouchEnd)
+      container?.removeEventListener('touchcancel', onTouchEnd)
       window.removeEventListener('sm-output', handleOutput)
       observer.disconnect()
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
+      // Final flush so the next mount replays the latest output immediately.
+      writeHistoryCache({
+        id: sidAtMount,
+        data: cachedData,
+        bytes: cachedBytes,
+        updatedAt: Date.now(),
+      })
       try { fitAddon.dispose() } catch { /* ignore */ }
       try { term.dispose() } catch { /* ignore */ }
       terminalRef.current = null

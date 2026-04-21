@@ -74,7 +74,8 @@ export class HttpApiServer {
 
   private bindSessionEvents(): void {
     this.sessionManager.on('output', (sessionId: string, data: string) => {
-      this.pushSse('output', { sessionId, data })
+      const totalBytes = this.sessionManager.getHistoryBytesTotal(sessionId)
+      this.pushSse('output', { sessionId, data, totalBytes })
     })
     this.sessionManager.on('exit', (sessionId: string, exitCode: number) => {
       this.pushSse('status', { sessionId, status: 'exited', exitCode })
@@ -228,6 +229,7 @@ export class HttpApiServer {
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+    res.setHeader('Access-Control-Expose-Headers', 'X-Sm-Total-Bytes')
   }
 
   private json(res: http.ServerResponse, status: number, body: unknown, req?: http.IncomingMessage): void {
@@ -458,13 +460,25 @@ export class HttpApiServer {
       return
     }
 
-    // GET /api/sessions/:id/history — raw output buffer for xterm.js replay
+    // GET /api/sessions/:id/history — raw output buffer for xterm.js replay.
+    // Supports ?after=N to fetch only bytes after a client-known offset, so
+    // a browser refresh with a cached prefix only transfers the delta.
+    // Responds with X-Sm-Total-Bytes so the client can update its cache.
     const historyMatch = urlPath.match(/^\/api\/sessions\/([^/]+)\/history$/)
     if (req.method === 'GET' && historyMatch) {
-      const history = this.sessionManager.getHistory(historyMatch[1])
+      const id = historyMatch[1]
+      const afterParam = url.searchParams.get('after')
+      const after = afterParam ? Math.max(0, parseInt(afterParam, 10) || 0) : NaN
+      const total = this.sessionManager.getHistoryBytesTotal(id)
+      const body = Number.isFinite(after)
+        ? this.sessionManager.readHistoryRange(id, after)
+        : this.sessionManager.getHistory(id)
       this.cors(res)
-      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
-      res.end(history)
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Sm-Total-Bytes': String(total),
+      })
+      res.end(body)
       return
     }
 

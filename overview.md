@@ -1096,3 +1096,20 @@ Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before f
 **Fix:** Lifted mods state to `ExpandedSession`, mirrored it in a ref (`mobileModsRef`) that the xterm `onData` handler reads synchronously. When a single character flows through onData with ctrl/alt held, transform it — Ctrl+letter → control byte (`char & 0x1f`), Alt+char → `ESC`-prefixed. Mods clear after the character is sent, mirroring desktop behavior. Cmd is still UI-only (no universal pty encoding).
 
 **Files changed:** `web/src/components/ExpandedSession.tsx`.
+
+---
+
+## Checkpoint — Mobile touch scroll + file-backed session history with delta cache
+**Scope:** Items 4 (mobile scroll) and 2 (persistent history) from the layout-and-perf batch. Items 1 (terminal text quality) and 3 (layout consistency) are still open.
+
+**Mobile touch scroll:** Added `touchstart`/`touchmove`/`touchend` handlers to the xterm container in `web/src/components/ExpandedSession.tsx`. One-finger vertical drag calls `term.scrollLines(-n)`; pixel→line conversion uses `container.clientHeight / term.rows`. `preventDefault` only fires when we actually scroll, so single taps (focus/keyboard) and two-finger pinch-zoom still work.
+
+**Server file-backed history:** `session-manager.ts` now opens `<SM_DATA_DIR>/session-logs/<sessionId>.log` on session create, appends every pty byte via a `WriteStream`, and tracks a `historyBytesTotal` counter (lifetime bytes, never trimmed — distinct from the in-memory 2MB `historyBuffer`). New methods: `getHistoryBytesTotal`, `readHistoryRange(after)`. History endpoint in `http-server.ts` now accepts `?after=N` and returns `X-Sm-Total-Bytes`. SSE `output` events include `totalBytes` so clients can track the server's offset live.
+
+**Client delta cache:** Added IndexedDB-backed history cache in `ExpandedSession.tsx` (`sm-history` db, `sessions` store). On mount: replay cached prefix into xterm, fetch `?after=cachedBytes`, apply delta, persist new baseline. SSE chunks append to in-memory `cachedData` and update `cachedBytes` from the server-provided `totalBytes`; cache is flushed on a 1s timer while streaming and one final write on unmount. `fetchHistory(config, id, after?)` now returns `{data, totalBytes}`.
+
+**Location tradeoff:** Logs live under the server's data dir (`~/.sessionmanager/session-logs/` in typical deploy, or `$SM_DATA_DIR/session-logs/`), not inside each developer's project tree. Keeps user repos clean at the cost of not being visually co-located with the code. Easy to switch later if desired.
+
+**Known gaps:** (a) no log rotation — files grow unbounded, acceptable for now given 2MB per-session memory cap bounds typical usage. (b) deleted sessions leave stale IDB entries client-side; minor storage leak only.
+
+**Files changed:** `server/src/session-manager.ts`, `server/src/http-server.ts`, `web/src/api.ts`, `web/src/App.tsx`, `web/src/components/ExpandedSession.tsx`.

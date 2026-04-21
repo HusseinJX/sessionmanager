@@ -36,10 +36,22 @@ export interface SessionStatus {
 const MAX_HISTORY_BYTES = 2 * 1024 * 1024  // 2MB raw PTY history for xterm.js replay
 const MAX_ANALYSIS_CHUNKS = 2000            // chunks kept for TUI line extraction + delta reads
 
+const SESSION_LOGS_DIR = path.join(process.env.SM_DATA_DIR || process.cwd(), 'session-logs')
+function ensureLogsDir(): void {
+  try { fs.mkdirSync(SESSION_LOGS_DIR, { recursive: true }) } catch { /* ignore */ }
+}
+function logPathFor(id: string): string {
+  // Scrub slashes and dots defensively even though ids are UUIDs
+  const safe = id.replace(/[^a-zA-Z0-9_-]/g, '_')
+  return path.join(SESSION_LOGS_DIR, `${safe}.log`)
+}
+
 interface PtySession {
   pty: IPty
   meta: SessionMeta
   historyBuffer: string      // raw PTY bytes for full xterm.js replay, capped at MAX_HISTORY_BYTES
+  historyBytesTotal: number  // lifetime bytes written to the log file (not capped)
+  logStream: fs.WriteStream | null
   outputBuffer: string[]     // recent chunks for TUI analysis and delta reads
   batchBuffer: string
   inputWaiting: boolean
@@ -321,10 +333,28 @@ export class SessionManager extends EventEmitter {
       env: env as Record<string, string>,
     })
 
+    ensureLogsDir()
+    let logStream: fs.WriteStream | null = null
+    let initialBytes = 0
+    try {
+      const p = logPathFor(meta.id)
+      // If a log already exists for this id (e.g., re-created session), seed
+      // historyBytesTotal so byte offsets remain consistent; otherwise start fresh.
+      try { initialBytes = fs.statSync(p).size } catch { initialBytes = 0 }
+      logStream = fs.createWriteStream(p, { flags: 'a' })
+      logStream.on('error', (err) => {
+        console.error(`[session ${meta.id}] log stream error:`, err)
+      })
+    } catch (err) {
+      console.error(`[session ${meta.id}] failed to open log stream:`, err)
+    }
+
     const session: PtySession = {
       pty,
       meta: { ...meta, cwd, status: 'running' },
       historyBuffer: '',
+      historyBytesTotal: initialBytes,
+      logStream,
       outputBuffer: [],
       batchBuffer: '',
       inputWaiting: false,
@@ -342,11 +372,19 @@ export class SessionManager extends EventEmitter {
       session.lastOutputTime = Date.now()
       session.activityBytes += data.length
 
-      // Full history for xterm.js replay — cap at MAX_HISTORY_BYTES by trimming the front
+      // Full history for xterm.js replay — cap in-memory at MAX_HISTORY_BYTES by trimming the front
       session.historyBuffer += data
       if (session.historyBuffer.length > MAX_HISTORY_BYTES) {
         session.historyBuffer = session.historyBuffer.slice(-MAX_HISTORY_BYTES)
       }
+
+      // Append to the on-disk log so clients can resume from any byte offset
+      // and so history survives server restarts. historyBytesTotal is the
+      // lifetime byte count — never trimmed — and drives delta-fetch offsets.
+      if (session.logStream) {
+        session.logStream.write(data)
+      }
+      session.historyBytesTotal += Buffer.byteLength(data, 'utf8')
 
       // Analysis buffer for TUI line extraction and delta reads
       session.outputBuffer.push(data)
@@ -402,6 +440,8 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id)
     if (!session) return
     try { session.pty.kill() } catch {}
+    try { session.logStream?.end() } catch {}
+    session.logStream = null
     this.sessions.delete(id)
   }
 
@@ -449,6 +489,37 @@ export class SessionManager extends EventEmitter {
 
   getHistory(id: string): string {
     return this.sessions.get(id)?.historyBuffer ?? ''
+  }
+
+  getHistoryBytesTotal(id: string): number {
+    const s = this.sessions.get(id)
+    if (s) return s.historyBytesTotal
+    // Session isn't running but a log may still exist (e.g., ended session).
+    try { return fs.statSync(logPathFor(id)).size } catch { return 0 }
+  }
+
+  // Read the log file tail starting at byte `after`. Returns '' if the
+  // offset is at or past the current end. Used by the client to fetch only
+  // the delta on browser refresh when it has a cached prefix.
+  readHistoryRange(id: string, after: number): string {
+    const p = logPathFor(id)
+    let size = 0
+    try { size = fs.statSync(p).size } catch { return '' }
+    const start = Math.max(0, Math.min(after, size))
+    if (start >= size) return ''
+    try {
+      const fd = fs.openSync(p, 'r')
+      try {
+        const len = size - start
+        const buf = Buffer.alloc(len)
+        fs.readSync(fd, buf, 0, len, start)
+        return buf.toString('utf8')
+      } finally {
+        fs.closeSync(fd)
+      }
+    } catch {
+      return ''
+    }
   }
 
   getSessionMeta(id: string): SessionMeta | undefined {
