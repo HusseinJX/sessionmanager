@@ -1087,3 +1087,12 @@ Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before f
 **Fix:** Added a **Paste** button to `MobileKeybar` in `web/src/components/ExpandedSession.tsx` (between Tab and the arrow-key group). It calls `navigator.clipboard.readText()` and sends the text straight into the terminal via `onSend`. If the Clipboard API is unavailable or permission is denied, falls back to `window.prompt` so the user can paste manually.
 
 **Files changed:** `web/src/components/ExpandedSession.tsx`.
+
+---
+
+## Checkpoint — Wire mobile Ctrl/Opt modifiers to phone keyboard
+**Problem:** Tapping Ctrl in `MobileKeybar` turned it green, but pressing `c` on the native mobile keyboard sent a plain `c` to the pty instead of `\x03` (SIGINT). The mods state lived inside `MobileKeybar` and was only consulted by its own arrow/special buttons; xterm's `onData` handler never saw it.
+
+**Fix:** Lifted mods state to `ExpandedSession`, mirrored it in a ref (`mobileModsRef`) that the xterm `onData` handler reads synchronously. When a single character flows through onData with ctrl/alt held, transform it — Ctrl+letter → control byte (`char & 0x1f`), Alt+char → `ESC`-prefixed. Mods clear after the character is sent, mirroring desktop behavior. Cmd is still UI-only (no universal pty encoding).
+
+**Files changed:** `web/src/components/ExpandedSession.tsx`.

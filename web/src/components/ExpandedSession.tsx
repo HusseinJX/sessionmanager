@@ -73,17 +73,18 @@ function SidebarItem({
   )
 }
 
+type MobileMods = { ctrl: boolean; alt: boolean; meta: boolean }
+
 // Mobile virtual keyboard bar
 function MobileKeybar({
   onSend,
+  mods,
+  setMods,
 }: {
   onSend: (data: string) => void
+  mods: MobileMods
+  setMods: React.Dispatch<React.SetStateAction<MobileMods>>
 }) {
-  const [mods, setMods] = useState<{ ctrl: boolean; alt: boolean; meta: boolean }>({
-    ctrl: false,
-    alt: false,
-    meta: false,
-  })
   const [keyboardOffset, setKeyboardOffset] = useState(0)
 
   useEffect(() => {
@@ -246,6 +247,9 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [liveCwds, setLiveCwds] = useState<Record<string, string>>({})
+  const [mobileMods, setMobileMods] = useState<MobileMods>({ ctrl: false, alt: false, meta: false })
+  const mobileModsRef = useRef<MobileMods>(mobileMods)
+  useEffect(() => { mobileModsRef.current = mobileMods }, [mobileMods])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
@@ -517,7 +521,27 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
         console.debug('[expanded] xterm auto-reply stripped', JSON.stringify(data))
       }
       if (!clean) return
-      sendInput(config, activeSessionId, clean).catch(() => {})
+
+      // Apply mobile keybar modifiers (Ctrl/Opt) to chars typed on the phone's keyboard.
+      // Cmd has no universal pty encoding — treated as UI state only and cleared.
+      let out = clean
+      const mm = mobileModsRef.current
+      if ((mm.ctrl || mm.alt || mm.meta) && clean.length === 1) {
+        if (mm.ctrl) {
+          const ch = clean.charCodeAt(0)
+          const upper = ch >= 0x61 && ch <= 0x7a ? ch - 0x20 : ch
+          if (upper >= 0x40 && upper <= 0x5f) {
+            out = String.fromCharCode(upper - 0x40)
+          }
+        }
+        if (mm.alt) {
+          out = '\x1b' + out
+        }
+        mobileModsRef.current = { ctrl: false, alt: false, meta: false }
+        setMobileMods({ ctrl: false, alt: false, meta: false })
+      }
+
+      sendInput(config, activeSessionId, out).catch(() => {})
     })
 
     // Fit & resize
@@ -703,6 +727,8 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
 
         {/* Mobile virtual keyboard bar */}
         <MobileKeybar
+          mods={mobileMods}
+          setMods={setMobileMods}
           onSend={(data) => {
             if (config) {
               sendInput(config, activeSessionId, data).catch(() => {})
