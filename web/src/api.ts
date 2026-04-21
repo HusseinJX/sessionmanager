@@ -117,6 +117,27 @@ export async function deleteSession(
   )
 }
 
+export async function updateSessionNameApi(
+  config: ServerConfig,
+  projectId: string,
+  sessionId: string,
+  name: string
+): Promise<void> {
+  const res = await fetch(
+    `${config.url}/api/projects/${encodeURIComponent(projectId)}` +
+      `/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name }),
+    }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
 export async function updateSessionNotesApi(
   config: ServerConfig,
   projectId: string,

@@ -4,7 +4,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, setSessionQueueRunning } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, updateSessionName, setSessionQueueRunning } from './store'
 
 // Compute a short label like "A1", "A2" for a top-level session (runners excluded from count).
 function computeSessionLabel(projectId: string): string {
@@ -433,6 +433,23 @@ export class HttpApiServer {
           const { notes } = JSON.parse(body) as { notes?: string }
           if (typeof notes !== 'string') return this.json(res, 400, { error: 'notes must be a string' })
           const session = updateSessionNotes(sessionNotesMatch[1], sessionNotesMatch[2], notes)
+          if (!session) return this.json(res, 404, { error: 'Session not found' })
+          this.json(res, 200, session)
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' })
+        }
+      })
+      return
+    }
+
+    // PATCH /api/projects/:pid/sessions/:sid — update session name
+    const sessionPatchMatch = urlPath.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)$/)
+    if (req.method === 'PATCH' && sessionPatchMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const { name } = JSON.parse(body) as { name?: string }
+          if (typeof name !== 'string' || !name.trim()) return this.json(res, 400, { error: 'name must be a non-empty string' })
+          const session = updateSessionName(sessionPatchMatch[1], sessionPatchMatch[2], name.trim())
           if (!session) return this.json(res, 404, { error: 'Session not found' })
           this.json(res, 200, session)
         } catch {

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react'
 import { useAppStore } from '../store'
 import type { SessionStatus } from '../types'
-import { sendCommand, deleteSession, uploadImage, setQueueRunningApi } from '../api'
+import { sendCommand, deleteSession, uploadImage, setQueueRunningApi, updateSessionNameApi } from '../api'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -56,10 +56,14 @@ export default function TerminalCard({ session, projectId, autoLabel }: Terminal
     projectTasks,
     sessionQueueRunning,
     setSessionQueueRunning,
+    updateSessionName,
   } = useAppStore()
   const [cmdInput, setCmdInput] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [editingName, setEditingName] = useState(false)
+  const [nameInput, setNameInput] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
 
   const runtimeState = sessionStates[session.id]
   const status = runtimeState?.status ?? session.status ?? 'running'
@@ -170,6 +174,28 @@ export default function TerminalCard({ session, projectId, autoLabel }: Terminal
     setQueueRunningApi(config, activeProjectId, session.id, next).catch(() => {})
   }
 
+  const handleNameClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setNameInput(session.name)
+    setEditingName(true)
+    setTimeout(() => nameInputRef.current?.select(), 0)
+  }
+
+  const handleNameSave = () => {
+    const trimmed = nameInput.trim()
+    if (trimmed && trimmed !== session.name && config && activeProjectId) {
+      updateSessionName(activeProjectId, session.id, trimmed)
+      updateSessionNameApi(config, activeProjectId, session.id, trimmed).catch(console.error)
+    }
+    setEditingName(false)
+  }
+
+  const handleNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.stopPropagation()
+    if (e.key === 'Enter') handleNameSave()
+    if (e.key === 'Escape') setEditingName(false)
+  }
+
   return (
     <div
       className={`
@@ -199,12 +225,28 @@ export default function TerminalCard({ session, projectId, autoLabel }: Terminal
               {session.label ?? autoLabel}
             </span>
           )}
-          <span className="text-sm font-medium text-text-primary truncate">
-            {liveDisplayName}
-            {session.claudePrompt && (
-              <span className="text-text-muted font-normal"> / {session.claudePrompt}</span>
-            )}
-          </span>
+          {editingName ? (
+            <input
+              ref={nameInputRef}
+              className="text-sm font-medium text-text-primary bg-bg-overlay border border-accent-green/50 rounded px-1 py-0 min-w-0 w-32 outline-none focus:ring-1 focus:ring-accent-green/40"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onBlur={handleNameSave}
+              onKeyDown={handleNameKeyDown}
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span
+              className="text-sm font-medium text-text-primary truncate cursor-text hover:text-accent-green transition-colors"
+              title="Click to rename"
+              onClick={handleNameClick}
+            >
+              {session.name}
+              {session.claudePrompt && (
+                <span className="text-text-muted font-normal"> / {session.claudePrompt}</span>
+              )}
+            </span>
+          )}
           <button
             className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"
             title="Open planner filtered to this terminal"

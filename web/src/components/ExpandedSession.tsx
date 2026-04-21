@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { useAppStore } from '../store'
-import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, uploadImage, setQueueRunningApi, fetchTasks } from '../api'
+import { sendInput, sendCommand, fetchHistory, resizeSession, createSession, deleteSession, fetchProjects, uploadImage, setQueueRunningApi, fetchTasks, updateSessionNameApi } from '../api'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -295,9 +295,13 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     projectTasks,
     sessionQueueRunning,
     setSessionQueueRunning,
+    updateSessionName,
   } = useAppStore()
 
   const [activeSessionId, setActiveSessionId] = useState(sessionId)
+  const [editingName, setEditingName] = useState(false)
+  const [nameInput, setNameInput] = useState('')
+  const nameInputRef = useRef<HTMLInputElement>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [liveCwds, setLiveCwds] = useState<Record<string, string>>({})
   const [mobileMods, setMobileMods] = useState<MobileMods>({ ctrl: false, alt: false, meta: false })
@@ -374,6 +378,29 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
     if (!ownerProject) return
     openSessionNotesEditor(ownerProject.id, activeSessionId)
   }, [ownerProject, activeSessionId, openSessionNotesEditor])
+
+  const handleNameClick = () => {
+    const cur = ownerProject?.sessions.find((s) => s.id === activeSessionId)
+    setNameInput(cur?.name ?? '')
+    setEditingName(true)
+    setTimeout(() => nameInputRef.current?.select(), 0)
+  }
+
+  const handleNameSave = () => {
+    const trimmed = nameInput.trim()
+    const cur = ownerProject?.sessions.find((s) => s.id === activeSessionId)
+    if (trimmed && trimmed !== cur?.name && config && ownerProject) {
+      updateSessionName(ownerProject.id, activeSessionId, trimmed)
+      updateSessionNameApi(config, ownerProject.id, activeSessionId, trimmed).catch(console.error)
+    }
+    setEditingName(false)
+  }
+
+  const handleNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.stopPropagation()
+    if (e.key === 'Enter') handleNameSave()
+    if (e.key === 'Escape') setEditingName(false)
+  }
 
   useEffect(() => {
     if (!config || !ownerProject) return
@@ -793,7 +820,24 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
                     {activeSessionConfig?.label ?? activeBadge}
                   </span>
                 )}
-                <span className="text-sm font-medium text-text-primary truncate">{displayName}</span>
+                {editingName ? (
+                  <input
+                    ref={nameInputRef}
+                    className="text-sm font-medium text-text-primary bg-bg-overlay border border-accent-green/50 rounded px-1 py-0 min-w-0 w-36 outline-none focus:ring-1 focus:ring-accent-green/40"
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    onBlur={handleNameSave}
+                    onKeyDown={handleNameKeyDown}
+                  />
+                ) : (
+                  <span
+                    className="text-sm font-medium text-text-primary truncate cursor-text hover:text-accent-green transition-colors"
+                    title="Click to rename"
+                    onClick={handleNameClick}
+                  >
+                    {activeSessionConfig?.name ?? displayName}
+                  </span>
+                )}
                 <button
                   className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"
                   onClick={handleOpenPlanner}

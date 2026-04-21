@@ -175,6 +175,15 @@ export function updateSessionNotes(projectId: string, sessionId: string, notes: 
   return session
 }
 
+export function updateSessionName(projectId: string, sessionId: string, name: string): SessionConfig | null {
+  const project = store().projects.find((p) => p.id === projectId)
+  const session = project?.sessions.find((s) => s.id === sessionId)
+  if (!session) return null
+  session.name = name
+  save()
+  return session
+}
+
 // --- Task CRUD ---
 
 export function getTasksForProject(projectId: string): TaskItem[] {

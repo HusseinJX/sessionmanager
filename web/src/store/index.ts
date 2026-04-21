@@ -89,6 +89,7 @@ interface AppState {
   setSessionQueueRunning: (sessionId: string, running: boolean) => void
   isSessionQueueRunning: (sessionId: string) => boolean
   updateSessionNotes: (projectId: string, sessionId: string, notes: string) => void
+  updateSessionName: (projectId: string, sessionId: string, name: string) => void
   removeSessionFromProject: (projectId: string, sessionId: string) => void
   openSessionNotesEditor: (projectId: string, sessionId: string) => void
   closeSessionNotesEditor: () => void
@@ -351,6 +352,20 @@ export const useAppStore = create<AppState>((set, get) => ({
               ...project,
               sessions: project.sessions.map((session) =>
                 session.id === sessionId ? { ...session, notes } : session
+              ),
+            }
+          : project
+      ),
+    })),
+
+  updateSessionName: (projectId, sessionId, name) =>
+    set((state) => ({
+      projects: state.projects.map((project) =>
+        project.id === projectId
+          ? {
+              ...project,
+              sessions: project.sessions.map((session) =>
+                session.id === sessionId ? { ...session, name } : session
               ),
             }
           : project
