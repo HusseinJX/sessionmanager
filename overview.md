@@ -1066,3 +1066,15 @@ Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before f
 - `web/src/components/ExpandedSession.tsx` — remove the duplicate `EventSource`; subscribe to the window `sm-output` event instead.
 
 **Deploy:** Web bundle rebuilt (`index-BbDePMgK.js`), rsynced to `/opt/sessionmanager/web/dist/` on `64.23.191.7`. No server restart required (server code unchanged).
+
+---
+
+## Checkpoint — Switch vite minifier to terser (xterm requestMode ReferenceError)
+
+**Problem:** After the SSE consolidation, the expanded terminal still froze on deployed UI with a console `Uncaught ReferenceError: assignment to undeclared variable r` originating inside xterm.js's `requestMode` during `_writeBuffer → parse`. Every DECRQM query (`CSI ? Pm $ p`) from Claude's TUI hit the bad path and halted writes.
+
+**Root cause:** Vite's default esbuild minifier miscompiles xterm 6.0.0's `requestMode`. Source (xterm.mjs) has `let r; (P => (...))(r ||= {});` — valid JS. Esbuild dropped the `let r;` declaration while rewriting `r ||= {}` to `void 0 || (r = {})`, leaving `r` as a bare global assignment that throws under ES-module strict mode.
+
+**Fix:** Install `terser` and switch `build.minify` to `'terser'` in `web/vite.config.ts`. Terser emits `let i; var r; (r = i || (i = {}))...` — correct. Bundle rebuilt as `index-Dk2-vidh.js`, rsynced to droplet. No server restart.
+
+**Files changed:** `web/vite.config.ts`, `web/package.json` (terser dev dep).
