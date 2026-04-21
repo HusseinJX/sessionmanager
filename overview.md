@@ -1113,3 +1113,21 @@ Each now early-returns when `data` matches `/^\x1b\[[?>]?[\d;]*[cRn]$/` before f
 **Known gaps:** (a) no log rotation — files grow unbounded, acceptable for now given 2MB per-session memory cap bounds typical usage. (b) deleted sessions leave stale IDB entries client-side; minor storage leak only.
 
 **Files changed:** `server/src/session-manager.ts`, `server/src/http-server.ts`, `web/src/api.ts`, `web/src/App.tsx`, `web/src/components/ExpandedSession.tsx`.
+
+---
+
+## Checkpoint — Session Labels for Telegram Hook
+
+Added per-session short labels (A1, A2, B1, B2, …) so Claude hooks running inside terminals can identify which session they're in when sending Telegram notifications.
+
+**How it works:**
+- Project position → letter (1st project = A, 2nd = B, …)
+- Session position within project → number (1st = 1, 2nd = 2, …)
+- Result: A1, A2, B1, B3, etc.
+- Label is stored in `SessionConfig.label` (persisted to `data.json`)
+- Set as `SM_SESSION_LABEL` env var in the PTY at session creation — Claude hooks read it from there
+- On server restart, stored label is used; old sessions without a stored label get one computed from their current position
+
+**UI display:** Small green monospace badge (e.g. `A1`) in the TerminalCard header and ExpandedSession toolbar, left of the session name.
+
+**Files changed:** `server/src/store.ts`, `server/src/session-manager.ts`, `server/src/http-server.ts`, `server/src/index.ts`, `web/src/types.ts`, `web/src/components/TerminalCard.tsx`, `web/src/components/ExpandedSession.tsx`.

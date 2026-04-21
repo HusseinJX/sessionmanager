@@ -776,6 +776,11 @@ export default function ExpandedSession({ sessionId }: ExpandedSessionProps) {
             <div className="h-4 w-px bg-border-subtle flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               <div className="flex items-center gap-2 min-w-0">
+                {activeSessionConfig?.label && (
+                  <span className="font-mono text-[10px] font-bold text-accent-green bg-accent-green/10 border border-accent-green/30 rounded px-1 py-0.5 flex-shrink-0 select-none">
+                    {activeSessionConfig.label}
+                  </span>
+                )}
                 <span className="text-sm font-medium text-text-primary truncate">{displayName}</span>
                 <button
                   className="text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle rounded px-1.5 py-0.5"

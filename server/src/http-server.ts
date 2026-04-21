@@ -6,6 +6,19 @@ import * as os from 'os'
 import type { SessionManager } from './session-manager'
 import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, setSessionQueueRunning } from './store'
 
+// Compute a short label like "A1", "B3" for a session.
+// Pass sessionId=null when called before the session is added (uses future position = current count + 1).
+function computeSessionLabel(projectId: string, sessionId: string | null): string {
+  const projects = getProjects()
+  const projectIdx = projects.findIndex((p) => p.id === projectId)
+  const projectLetter = String.fromCharCode(65 + Math.min(Math.max(projectIdx, 0), 25))
+  const project = projects[projectIdx]
+  const sessionNumber = sessionId
+    ? (project?.sessions.findIndex((s) => s.id === sessionId) ?? 0) + 1
+    : (project?.sessions.length ?? 0) + 1
+  return `${projectLetter}${sessionNumber}`
+}
+
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -319,7 +332,9 @@ export class HttpApiServer {
           const { name, cwd, command, parentSessionId } = JSON.parse(body) as { name: string; cwd: string; command?: string; parentSessionId?: string }
           if (!name || !cwd) return this.json(res, 400, { error: 'name and cwd required' })
           const projectId = sessionCreateMatch[1]
-          const session = addSession(projectId, { name, cwd, command, parentSessionId })
+          // Compute label before adding so we know the session's future index
+          const label = parentSessionId ? undefined : computeSessionLabel(projectId, null)
+          const session = addSession(projectId, { name, cwd, command, parentSessionId, label })
           const project = getProjects().find((p) => p.id === projectId)
           // Start the pty
           this.sessionManager.createSession({
@@ -329,6 +344,7 @@ export class HttpApiServer {
             command: session.command,
             projectId,
             projectName: project?.name,
+            label: session.label,
             status: 'running',
           })
           this.pushSse('session-created', { projectId, session })

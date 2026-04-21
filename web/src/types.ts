@@ -6,6 +6,7 @@ export interface SessionConfig {
   parentSessionId?: string
   notes?: string
   queueRunning?: boolean
+  label?: string
 }
 
 export interface SessionStatus extends SessionConfig {

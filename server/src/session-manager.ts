@@ -15,6 +15,7 @@ export interface SessionMeta {
   command?: string
   projectId: string
   projectName?: string
+  label?: string
   status: 'running' | 'exited'
   exitCode?: number
 }
@@ -319,6 +320,7 @@ export class SessionManager extends EventEmitter {
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       LANG: process.env.LANG || 'en_US.UTF-8',
+      ...(meta.label ? { SM_SESSION_LABEL: meta.label } : {}),
     }
     if (isZsh) {
       env._SM_ORIG_ZDOTDIR = process.env.ZDOTDIR || os.homedir()

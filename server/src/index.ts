@@ -41,9 +41,11 @@ sessionManager.start()
 
 // Restore sessions from store
 const projects = getProjects()
-for (const project of projects) {
-  for (const session of project.sessions) {
-    console.log(`  Starting session: ${session.name} (${session.cwd})`)
+for (const [projectIdx, project] of projects.entries()) {
+  const projectLetter = String.fromCharCode(65 + Math.min(projectIdx, 25))
+  for (const [sessionIdx, session] of project.sessions.entries()) {
+    const label = session.label ?? (session.parentSessionId ? undefined : `${projectLetter}${sessionIdx + 1}`)
+    console.log(`  Starting session: ${session.name} (${session.cwd})${label ? ` [${label}]` : ''}`)
     sessionManager.createSession({
       id: session.id,
       name: session.name,
@@ -51,6 +53,7 @@ for (const project of projects) {
       command: session.command,
       projectId: project.id,
       projectName: project.name,
+      label,
       status: 'running',
     })
   }
