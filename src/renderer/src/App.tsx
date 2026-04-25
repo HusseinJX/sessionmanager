@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAppStore } from './store'
 import { matchesBinding } from './keybindings'
 import ProjectSidebar from './components/ProjectSidebar'
@@ -10,6 +10,7 @@ import ConfigPanel from './components/ConfigPanel'
 import PlannerBoard from './components/PlannerBoard'
 import SessionNotesModal from './components/SessionNotesModal'
 import TerminalModeView from './components/TerminalModeView'
+import JournalPanel from './components/JournalPanel'
 import type { Project } from './store'
 
 declare global {
@@ -246,7 +247,11 @@ export default function App(): React.ReactElement {
     const remove = window.api.onMenuNewWindow(() => {
       const state = useAppStore.getState()
       if (!state.settings.windowMode && !state.isTerminalMode) return
-      window.api.newWindow({ terminalMode: state.isTerminalMode })
+      if (state.isTerminalMode) {
+        state.requestNewWindow()
+      } else {
+        window.api.newWindow({ terminalMode: false })
+      }
     })
     return remove
   }, [])
@@ -445,17 +450,26 @@ export default function App(): React.ReactElement {
       if (inInput && !e.metaKey && !e.ctrlKey) return
 
       // ── App shortcuts ───────────────────────────────────────────────
-      // Cmd+N: open a new window of the same type as the current window
+      // Cmd+N: in terminal mode add a new tab; in window mode open a new window
       if (e.metaKey && e.key === 'n' && !e.shiftKey && !e.altKey && !e.ctrlKey) {
-        if (state.settings.windowMode || state.isTerminalMode) {
+        if (state.isTerminalMode) {
           e.preventDefault()
-          window.api.newWindow({ terminalMode: state.isTerminalMode })
+          state.requestNewWindow()
+          return
+        }
+        if (state.settings.windowMode) {
+          e.preventDefault()
+          window.api.newWindow({ terminalMode: false })
           return
         }
       }
       if (matchesBinding(e, 'app.newTerminal', kb)) {
         e.preventDefault()
-        handleQuickTerminal()
+        if (state.isTerminalMode) {
+          state.requestNewTab()
+        } else {
+          handleQuickTerminal()
+        }
         return
       }
       if (matchesBinding(e, 'app.newProject', kb)) {
@@ -526,29 +540,36 @@ export default function App(): React.ReactElement {
   }, [])
 
   const hasProjects = projects.length > 0
+  const [showJournal, setShowJournal] = useState(false)
 
   return (
     <div className="flex h-screen bg-bg-base text-text-primary overflow-hidden">
       {/* Left sidebar */}
       <ProjectSidebar />
 
-      {/* Main content area */}
-      <div className="flex flex-col flex-1 overflow-hidden">
-        {/* Top bar — drag region + actions */}
-        <MainTopBar />
+      {/* Main content area or terminal mode (sidebar stays visible in both) */}
+      {isTerminalMode ? (
+        <TerminalModeView />
+      ) : (
+        <div className="flex flex-col flex-1 overflow-hidden">
+          {/* Top bar — drag region + actions */}
+          <MainTopBar showJournal={showJournal} onToggleJournal={() => setShowJournal((v) => !v)} />
 
-        {/* Content */}
-        <div className="flex-1 overflow-hidden relative">
-          {hasProjects ? (
-            <MainContent />
-          ) : (
-            <EmptyState />
-          )}
+          {/* Content + optional journal panel */}
+          <div className="flex flex-1 overflow-hidden relative">
+            <div className="flex-1 overflow-hidden relative">
+              {hasProjects ? (
+                <MainContent />
+              ) : (
+                <EmptyState />
+              )}
+            </div>
+            {showJournal && (
+              <JournalPanel onClose={() => setShowJournal(false)} />
+            )}
+          </div>
         </div>
-      </div>
-
-      {/* Terminal mode overlay */}
-      {isTerminalMode && <TerminalModeView />}
+      )}
 
       {/* Expanded terminal overlay */}
       {!isTerminalMode && expandedSessionId && (
@@ -570,7 +591,7 @@ export default function App(): React.ReactElement {
   )
 }
 
-function MainTopBar(): React.ReactElement {
+function MainTopBar({ showJournal, onToggleJournal }: { showJournal: boolean; onToggleJournal: () => void }): React.ReactElement {
   const { projects, activeProjectId, settings, setSettings, getActiveProject, getProjectViewMode, setProjectViewMode, setShowAddSessionModal, getSessionsForActiveProject, addSessionToProject, initSessionState, setTerminalMode, setTerminalModeSession, isTerminalMode } = useAppStore()
 
   const project = getActiveProject()
@@ -641,6 +662,19 @@ function MainTopBar(): React.ReactElement {
             <span>Terminal</span>
           </button>
         )}
+        <div className="w-px h-4 bg-border-subtle mx-0.5" />
+        <button
+          onClick={onToggleJournal}
+          className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors border ${
+            showJournal
+              ? 'text-accent-green border-accent-green/40 bg-accent-green/5'
+              : 'text-text-muted border-border-subtle/60 hover:text-text-primary hover:bg-bg-overlay'
+          }`}
+          title="Journal"
+        >
+          <span>✦</span>
+          <span>Journal</span>
+        </button>
         {/* Window mode toggle — hidden when already in terminal mode */}
         {!isTerminalMode && (
           <>

@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { CanvasAddon } from '@xterm/addon-canvas'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useAppStore, SessionConfig, SessionRuntimeState, SessionGroup } from '../store'
+import JournalPanel from './JournalPanel'
 import '@xterm/xterm/css/xterm.css'
 
 // ── Group color palette ────────────────────────────────────────────────────────
@@ -782,6 +783,7 @@ export default function TerminalModeView(): React.ReactElement {
 
   const {
     projects,
+    activeProjectId,
     sessionStates,
     settings,
     terminalModeSessionId,
@@ -798,13 +800,22 @@ export default function TerminalModeView(): React.ReactElement {
     setSessionGroupId: storeSetSessionGroup,
     reorderSessionsInProject,
     reorderGroupsInProject,
+    activeTerminalWindowId,
+    setTerminalWindowId,
+    newWindowRequest,
+    newTabRequest,
   } = useAppStore()
 
+  // Sessions for the active project only
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? projects[0] ?? null
+  const projectSessions = activeProject
+    ? activeProject.sessions.filter((s) => !s.parentSessionId)
+    : []
 
-  // All top-level sessions across all projects (no parentSessionId)
-  const allSessions = projects.flatMap((p) =>
-    p.sessions.filter((s) => !s.parentSessionId)
-  )
+  // Further filter by active window (group) when one is selected
+  const allSessions = activeTerminalWindowId
+    ? projectSessions.filter((s) => s.groupId === activeTerminalWindowId)
+    : projectSessions.filter((s) => !s.groupId)
 
   // Ensure there's always an active session
   const resolvedId = (terminalModeSessionId && allSessions.find((s) => s.id === terminalModeSessionId))
@@ -814,13 +825,11 @@ export default function TerminalModeView(): React.ReactElement {
   const activeSession = allSessions.find((s) => s.id === resolvedId) ?? null
 
   // Find which project owns the active session
-  const ownerProject = activeSession
-    ? projects.find((p) => p.sessions.some((s) => s.id === resolvedId))
-    : null
+  const ownerProject = activeProject
 
-  // Groups live on the first project (tabs are cross-project in terminal mode, use first project)
-  const primaryProject = ownerProject ?? projects[0] ?? null
-  const groups: SessionGroup[] = primaryProject?.groups ?? []
+  // Groups/windows are managed in the sidebar; never show section headers in the tab bar
+  const primaryProject = activeProject
+  const groups: SessionGroup[] = []
 
   // ── Group handlers ──────────────────────────────────────────────────────────
 
@@ -853,8 +862,10 @@ export default function TerminalModeView(): React.ReactElement {
 
   const handleSetSessionGroup = (sessionId: string, groupId: string | null): void => {
     if (!primaryProject) return
-    storeSetSessionGroup(primaryProject.id, sessionId, groupId)
-    window.api.setSessionGroup(primaryProject.id, sessionId, groupId).catch(() => {})
+    // When reordering within a window's tab bar, preserve the window's groupId
+    const effectiveGroupId = (activeTerminalWindowId && groupId === null) ? activeTerminalWindowId : groupId
+    storeSetSessionGroup(primaryProject.id, sessionId, effectiveGroupId)
+    window.api.setSessionGroup(primaryProject.id, sessionId, effectiveGroupId).catch(() => {})
   }
 
   const handleReorderSessions = (sessionIds: string[]): void => {
@@ -883,20 +894,43 @@ export default function TerminalModeView(): React.ReactElement {
   // Command input
   const [cmdInput, setCmdInput] = useState('')
 
+  // Grid view toggle — shows all sessions as a grid instead of single tab
+  const [gridView, setGridView] = useState(false)
+
+  // Journal panel
+  const [showJournal, setShowJournal] = useState(false)
+
+  // Back navigation — remembers what view to return to
+  const [prevView, setPrevView] = useState<{ grid: boolean; sessionId: string | null } | null>(null)
+
+  const handleBack = (): void => {
+    if (!prevView) return
+    if (prevView.grid) {
+      setGridView(true)
+    } else if (prevView.sessionId) {
+      setTerminalModeSession(prevView.sessionId)
+      setActiveSubId(prevView.sessionId)
+    }
+    setPrevView(null)
+  }
+
+  const handleNewWindowRef = useRef<() => void>(() => {})
+  const handleAddTabRef = useRef<() => void>(() => {})
+
   const handleAddTab = (): void => {
     let project = ownerProject ?? projects[0]
     if (!project) {
       if (!isStandalone) return
-      // Standalone: auto-create an in-memory project (never persisted)
       const newProj = { id: uuidv4(), name: 'Workspace', sessions: [], tasks: [] }
       addProject(newProj)
       project = newProj
     }
-    const lastCwd = allSessions.at(-1)?.cwd ?? '~'
+    const lastCwd = allSessions.at(-1)?.cwd ?? projectSessions.at(-1)?.cwd ?? '~'
     const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
+    const winId = activeTerminalWindowId
     if (isStandalone) {
       const id = uuidv4()
-      addSessionToProject(project.id, { id, name, cwd: lastCwd })
+      addSessionToProject(project.id, { id, name, cwd: lastCwd, ...(winId ? { groupId: winId } : {}) })
       initSessionState(id, project.id)
       window.api.createTerminal({ id, name, cwd: lastCwd, projectId: project.id })
         .then(() => setTerminalModeSession(id))
@@ -904,12 +938,40 @@ export default function TerminalModeView(): React.ReactElement {
       return
     }
     window.api.addSessionToStore(project.id, { name, cwd: lastCwd }).then((stored) => {
-      addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd })
+      addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd, ...(winId ? { groupId: winId } : {}) })
       initSessionState(stored.id, project.id)
+      if (winId) window.api.setSessionGroup(project.id, stored.id, winId).catch(() => {})
       return window.api.createTerminal({ id: stored.id, name, cwd: lastCwd, projectId: project.id })
         .then(() => setTerminalModeSession(stored.id))
     }).catch(console.error)
   }
+
+  const handleNewWindow = (): void => {
+    const project = ownerProject ?? projects[0]
+    if (!project && !isStandalone) return
+    const target = project ?? (() => {
+      const p = { id: uuidv4(), name: 'Workspace', sessions: [], tasks: [] }
+      addProject(p)
+      return p
+    })()
+    const existingColors = new Set((target.groups ?? []).map((g) => g.color))
+    const color = GROUP_COLORS.find((c) => !existingColors.has(c)) ?? GROUP_COLORS[(target.groups ?? []).length % GROUP_COLORS.length]
+    const windowNum = (target.groups ?? []).length + 1
+    const group: SessionGroup = { id: uuidv4(), name: `Window ${windowNum}`, color }
+    addGroupToProject(target.id, group)
+    window.api.addGroup(target.id, group).catch(() => {})
+    setTerminalWindowId(group.id)
+  }
+
+  // Keep refs current so effects always call the latest version
+  handleNewWindowRef.current = handleNewWindow
+  handleAddTabRef.current = handleAddTab
+  useEffect(() => {
+    if (newWindowRequest > 0) handleNewWindowRef.current()
+  }, [newWindowRequest]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (newTabRequest > 0) handleAddTabRef.current()
+  }, [newTabRequest]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCloseTab = async (e: React.MouseEvent, sessionId: string): Promise<void> => {
     e.stopPropagation()
@@ -996,44 +1058,49 @@ export default function TerminalModeView(): React.ReactElement {
 
   return (
     <div
-      className="absolute inset-0 flex flex-col bg-[#0d1117] z-20"
+      className="flex flex-col flex-1 bg-[#0d1117] relative"
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       {/* ── Tab bar ── */}
-      {/* Terminal mode is always window mode — traffic lights are always visible on macOS, so leave 80px on the left */}
+      {/* Sidebar covers the traffic lights area, so no left offset needed */}
       <div
         className="flex items-end gap-0.5 pt-2 bg-bg-base border-b border-border-subtle flex-shrink-0"
-        style={{ WebkitAppRegion: 'drag', paddingLeft: 80, paddingRight: 12 } as React.CSSProperties}
+        style={{ WebkitAppRegion: 'drag', paddingLeft: 12, paddingRight: 12 } as React.CSSProperties}
       >
-        <DraggableTabBar
-          sessions={allSessions}
-          groups={groups}
-          activeId={resolvedId}
-          sessionStates={sessionStates}
-          projectId={primaryProject?.id ?? ''}
-          onSelect={(id) => { setTerminalModeSession(id); setActiveSubId(id) }}
-          onClose={handleCloseTab}
-          onAdd={handleAddTab}
-          onAddGroup={handleAddGroup}
-          onGroupRename={handleGroupRename}
-          onGroupColorChange={handleGroupColorChange}
-          onGroupDelete={handleGroupDelete}
-          onReorder={handleReorderSessions}
-          onGroupReorder={handleReorderGroups}
-          onSetSessionGroup={handleSetSessionGroup}
-        />
-
+        {!gridView && !prevView?.grid && (
+          <>
+            <DraggableTabBar
+              sessions={allSessions.map((s) => ({ ...s, groupId: undefined }))}
+              groups={groups}
+              activeId={resolvedId}
+              sessionStates={sessionStates}
+              projectId={primaryProject?.id ?? ''}
+              onSelect={(id) => { setPrevView({ grid: false, sessionId: resolvedId }); setTerminalModeSession(id); setActiveSubId(id) }}
+              onClose={handleCloseTab}
+              onAdd={handleAddTab}
+              onAddGroup={handleAddGroup}
+              onGroupRename={handleGroupRename}
+              onGroupColorChange={handleGroupColorChange}
+              onGroupDelete={handleGroupDelete}
+              onReorder={handleReorderSessions}
+              onGroupReorder={handleReorderGroups}
+              onSetSessionGroup={handleSetSessionGroup}
+            />
+            <button
+              onClick={handleAddTab}
+              className="flex-shrink-0 px-2.5 py-1.5 text-text-muted hover:text-text-primary text-sm rounded-t-lg hover:bg-bg-overlay transition-colors mb-0 self-end"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              title="New tab"
+            >
+              +
+            </button>
+          </>
+        )}
         <button
-          onClick={handleAddTab}
-          className="flex-shrink-0 px-2.5 py-1.5 text-text-muted hover:text-text-primary text-sm rounded-t-lg hover:bg-bg-overlay transition-colors mb-0 self-end"
-          title="New tab"
-        >
-          +
-        </button>
-        <button
-          onClick={handleAddGroup}
-          className="flex-shrink-0 px-2 py-1.5 text-text-muted hover:text-accent-blue text-xs rounded-t-lg hover:bg-bg-overlay transition-colors mb-0 self-end font-mono"
-          title="New group"
+          onClick={() => setGridView((v) => !v)}
+          className={`flex-shrink-0 px-2 py-1.5 text-xs rounded-t-lg hover:bg-bg-overlay transition-colors mb-0 self-end font-mono ${gridView ? 'text-accent-green' : 'text-text-muted hover:text-text-primary'}`}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          title={gridView ? 'Tab view' : 'Grid view'}
         >
           ⊞
         </button>
@@ -1041,15 +1108,25 @@ export default function TerminalModeView(): React.ReactElement {
         {/* Draggable spacer — fills empty space between tabs and exit button */}
         <div className="flex-1 self-stretch" />
 
-        {/* Exit terminal mode */}
+        {/* Journal + Exit */}
         <div
-          className="flex items-center pb-1.5 flex-shrink-0"
+          className="flex items-center gap-1 pb-1.5 flex-shrink-0"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <button
-            onClick={() => {
-              setTerminalMode(false)
-            }}
+            onClick={() => setShowJournal((v) => !v)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors border ${
+              showJournal
+                ? 'text-accent-green border-accent-green/40 bg-accent-green/5'
+                : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay border-border-subtle'
+            }`}
+            title="Journal"
+          >
+            <span>✦</span>
+            <span>Journal</span>
+          </button>
+          <button
+            onClick={() => setTerminalMode(false)}
             className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded transition-colors border border-border-subtle"
             title="Exit terminal mode"
           >
@@ -1060,6 +1137,36 @@ export default function TerminalModeView(): React.ReactElement {
       </div>
 
       {/* ── Body ── */}
+      {gridView ? (
+        /* ── Grid view: all sessions tiled ── */
+        <div
+          className="flex-1 grid gap-1 p-1 overflow-hidden"
+          style={{
+            gridTemplateColumns: `repeat(${Math.max(1, Math.ceil(Math.sqrt(allSessions.length || 1)))}, 1fr)`
+          }}
+        >
+          {allSessions.map((s) => (
+            <div key={s.id} className="flex flex-col min-h-0 bg-[#0d1117] border border-border-subtle/50 rounded overflow-hidden">
+              <div
+                className="flex items-center gap-1.5 px-2 py-1 bg-bg-card border-b border-border-subtle/40 flex-shrink-0 cursor-pointer hover:bg-bg-overlay transition-colors"
+                onClick={() => { setPrevView({ grid: true, sessionId: resolvedId }); setTerminalModeSession(s.id); setActiveSubId(s.id); setGridView(false) }}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                  sessionStates[s.id]?.inputWaiting ? 'bg-accent-red animate-ping' :
+                  sessionStates[s.id]?.status === 'exited' ? 'bg-accent-red' : 'bg-accent-green'
+                }`} />
+                <span className="text-[10px] text-text-muted truncate flex-1">{s.name}</span>
+              </div>
+              <XtermPane sessionId={s.id} />
+            </div>
+          ))}
+          {allSessions.length === 0 && (
+            <div className="flex items-center justify-center col-span-full text-text-muted text-sm">
+              No terminals open
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="flex flex-1 min-h-0">
         {/* ── Main column ── */}
         <div className="flex flex-col flex-1 min-w-0">
@@ -1070,10 +1177,21 @@ export default function TerminalModeView(): React.ReactElement {
                 className="flex-shrink-0 px-6 pt-5 pb-3 border-b border-border-subtle/40 bg-[#0d1117]"
                 onClick={(e) => e.stopPropagation()}
               >
-                <EditableTitle
-                  value={activeSession.name}
-                  onChange={handleTitleChange}
-                />
+                <div className="flex items-center gap-2">
+                  {prevView && (
+                    <button
+                      onClick={handleBack}
+                      className="flex-shrink-0 text-text-muted hover:text-text-primary transition-colors text-sm leading-none pb-0.5"
+                      title={prevView.grid ? 'Back to grid' : 'Back to previous tab'}
+                    >
+                      ←
+                    </button>
+                  )}
+                  <EditableTitle
+                    value={activeSession.name}
+                    onChange={handleTitleChange}
+                  />
+                </div>
                 <div className="mt-1.5">
                   <EditableNotes
                     value={activeSession.notes ?? ''}
@@ -1186,6 +1304,14 @@ export default function TerminalModeView(): React.ReactElement {
           </aside>
         )}
       </div>
+      )} {/* end grid/tab conditional */}
+
+      {/* Journal panel — right-side overlay */}
+      {showJournal && (
+        <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl flex">
+          <JournalPanel onClose={() => setShowJournal(false)} />
+        </div>
+      )}
     </div>
   )
 }

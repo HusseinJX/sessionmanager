@@ -129,6 +129,12 @@ interface AppState {
   isSessionQueueRunning: (sessionId: string) => boolean
   setTerminalMode: (enabled: boolean) => void
   setTerminalModeSession: (id: string | null) => void
+  activeTerminalWindowId: string | null
+  setTerminalWindowId: (id: string | null) => void
+  newWindowRequest: number
+  requestNewWindow: () => void
+  newTabRequest: number
+  requestNewTab: () => void
   openSessionNotesEditor: (projectId: string, sessionId: string) => void
   closeSessionNotesEditor: () => void
   // Group actions
@@ -199,6 +205,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   showConfigPanel: false,
   isTerminalMode: _urlTerminalMode,
   terminalModeSessionId: null,
+  activeTerminalWindowId: null,
+  newWindowRequest: 0,
+  newTabRequest: 0,
   projectViewMode: {},
   plannerSessionFilter: {},
   sessionQueueRunning: {},
@@ -511,8 +520,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   isSessionQueueRunning: (sessionId) => get().sessionQueueRunning[sessionId] ?? false,
 
-  setTerminalMode: (enabled) => set({ isTerminalMode: enabled }),
+  setTerminalMode: (enabled) => set({ isTerminalMode: enabled, activeTerminalWindowId: null }),
   setTerminalModeSession: (id) => set({ terminalModeSessionId: id }),
+  setTerminalWindowId: (id) => set({ activeTerminalWindowId: id }),
+  requestNewWindow: () => set((state) => ({ newWindowRequest: state.newWindowRequest + 1 })),
+  requestNewTab: () => set((state) => ({ newTabRequest: state.newTabRequest + 1 })),
 
   openSessionNotesEditor: (projectId, sessionId) =>
     set({ sessionNotesEditor: { projectId, sessionId } }),

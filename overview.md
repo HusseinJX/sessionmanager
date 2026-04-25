@@ -1131,3 +1131,17 @@ Added per-session short labels (A1, A2, B1, B2, …) so Claude hooks running ins
 **UI display:** Small green monospace badge (e.g. `A1`) in the TerminalCard header and ExpandedSession toolbar, left of the session name.
 
 **Files changed:** `server/src/store.ts`, `server/src/session-manager.ts`, `server/src/http-server.ts`, `server/src/index.ts`, `web/src/types.ts`, `web/src/components/TerminalCard.tsx`, `web/src/components/ExpandedSession.tsx`.
+
+---
+
+## Checkpoint — Sidebar in terminal mode + new tab instead of new window
+
+**Request:** Show the projects sidebar in terminal mode, and make Cmd+N/new-window create a new tab within the current project instead of opening a new OS window.
+
+**Changes made:**
+
+1. **`store/index.ts`** — Added `addTabRequest: number` state and `requestAddTab()` action that increments it, used to signal TerminalModeView to add a new tab.
+
+2. **`App.tsx`** — Moved `TerminalModeView` from an absolute overlay to an inline flex sibling of `ProjectSidebar`. Now sidebar is always visible. `isTerminalMode ? <TerminalModeView /> : <div flex-col flex-1>...</div>`. Updated Cmd+N keyboard handler and `onMenuNewWindow` listener: in terminal mode they call `requestAddTab()` instead of `window.api.newWindow()`.
+
+3. **`TerminalModeView.tsx`** — Removed `absolute inset-0 z-20`, changed root to `flex flex-col flex-1`. Reduced tab bar `paddingLeft` from 80→12 (traffic lights are behind sidebar now). Added `activeProjectId` + `addTabRequest` from store. Updated `handleAddTab` to prefer the sidebar-selected project (`projects.find(p => p.id === activeProjectId)`). Added `handleAddTabRef` + `useEffect` to fire `handleAddTab` when `addTabRequest` increments.

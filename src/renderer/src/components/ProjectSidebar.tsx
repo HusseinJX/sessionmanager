@@ -33,7 +33,12 @@ export default function ProjectSidebar(): React.ReactElement {
     activeProjectId,
     sessionStates,
     settings,
+    isTerminalMode,
+    activeTerminalWindowId,
     setActiveProject,
+    setTerminalWindowId,
+    requestNewWindow,
+    removeGroupFromProject,
     setShowAddProjectModal,
     removeProject,
     renameProject,
@@ -109,71 +114,125 @@ export default function ProjectSidebar(): React.ReactElement {
           const isActive = project.id === activeProjectId
           const hasWaiting = projectHasWaiting(project.id)
           const sessionCount = getSessionCount(project.id)
+          const windows = project.groups ?? []
 
           return (
-            <div
-              key={project.id}
-              className={`
-                group relative flex items-center gap-2 px-2 py-2 rounded-md cursor-pointer
-                transition-all duration-100 mb-0.5
-                ${isActive
-                  ? 'bg-bg-overlay text-text-primary'
-                  : 'text-text-muted hover:bg-bg-overlay/50 hover:text-text-primary'
-                }
-              `}
-              onClick={() => setActiveProject(project.id)}
-              onDoubleClick={() => handleRenameStart(project.id, project.name)}
-            >
-              {/* Active indicator */}
-              {isActive && (
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-accent-green rounded-r-full" />
-              )}
-
-              <FolderIcon className={`flex-shrink-0 ${isActive ? 'text-accent-green' : 'text-text-muted'}`} />
-
-              {renamingId === project.id ? (
-                <input
-                  ref={renameInputRef}
-                  className="flex-1 bg-transparent text-sm outline-none border-b border-accent-blue text-text-primary min-w-0"
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onBlur={handleRenameCommit}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleRenameCommit()
-                    if (e.key === 'Escape') setRenamingId(null)
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-                />
-              ) : (
-                <span className="flex-1 text-sm truncate min-w-0">{project.name}</span>
-              )}
-
-              <div className="flex items-center gap-1 flex-shrink-0">
-                {hasWaiting && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent-red animate-ping flex-shrink-0" title="Needs input" />
+            <React.Fragment key={project.id}>
+              <div
+                className={`
+                  group relative flex items-center gap-2 px-2 py-2 rounded-md cursor-pointer
+                  transition-all duration-100 mb-0.5
+                  ${isActive
+                    ? 'bg-bg-overlay text-text-primary'
+                    : 'text-text-muted hover:bg-bg-overlay/50 hover:text-text-primary'
+                  }
+                `}
+                onClick={() => {
+                  setActiveProject(project.id)
+                  if (isTerminalMode) setTerminalWindowId(null)
+                }}
+                onDoubleClick={() => handleRenameStart(project.id, project.name)}
+              >
+                {/* Active indicator */}
+                {isActive && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 bg-accent-green rounded-r-full" />
                 )}
-                {sessionCount > 0 && !hasWaiting && (
-                  <span className={`text-[10px] tabular-nums ${isActive ? 'text-text-muted' : 'text-text-muted/50 group-hover:text-text-muted'}`}>
-                    {sessionCount}
-                  </span>
+
+                <FolderIcon className={`flex-shrink-0 ${isActive ? 'text-accent-green' : 'text-text-muted'}`} />
+
+                {renamingId === project.id ? (
+                  <input
+                    ref={renameInputRef}
+                    className="flex-1 bg-transparent text-sm outline-none border-b border-accent-blue text-text-primary min-w-0"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={handleRenameCommit}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleRenameCommit()
+                      if (e.key === 'Escape') setRenamingId(null)
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                  />
+                ) : (
+                  <span className="flex-1 text-sm truncate min-w-0">{project.name}</span>
                 )}
-                <button
-                  className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-text-muted hover:text-accent-blue text-xs leading-none p-0.5 rounded"
-                  title="Rename"
-                  onClick={(e) => { e.stopPropagation(); handleRenameStart(project.id, project.name) }}
-                >
-                  ✎
-                </button>
-                <button
-                  className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-text-muted hover:text-accent-red text-xs leading-none p-0.5 rounded"
-                  title="Remove project"
-                  onClick={(e) => { e.stopPropagation(); handleRemoveProject(project.id) }}
-                >
-                  ×
-                </button>
+
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {hasWaiting && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent-red animate-ping flex-shrink-0" title="Needs input" />
+                  )}
+                  {sessionCount > 0 && !hasWaiting && (
+                    <span className={`text-[10px] tabular-nums ${isActive ? 'text-text-muted' : 'text-text-muted/50 group-hover:text-text-muted'}`}>
+                      {sessionCount}
+                    </span>
+                  )}
+                  <button
+                    className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-text-muted hover:text-accent-blue text-xs leading-none p-0.5 rounded"
+                    title="Rename"
+                    onClick={(e) => { e.stopPropagation(); handleRenameStart(project.id, project.name) }}
+                  >
+                    ✎
+                  </button>
+                  <button
+                    className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity text-text-muted hover:text-accent-red text-xs leading-none p-0.5 rounded"
+                    title="Remove project"
+                    onClick={(e) => { e.stopPropagation(); handleRemoveProject(project.id) }}
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
-            </div>
+
+              {/* Windows (groups) — shown in terminal mode under the active project */}
+              {isTerminalMode && isActive && (
+                <div className="ml-3 mb-1 border-l border-border-subtle/50 pl-2">
+                  {windows.map((win) => {
+                    const winCount = project.sessions.filter(
+                      (s) => s.groupId === win.id && !s.parentSessionId
+                    ).length
+                    const isActiveWin = activeTerminalWindowId === win.id
+                    return (
+                      <div
+                        key={win.id}
+                        className={`group/win flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-xs transition-all mb-0.5 ${
+                          isActiveWin
+                            ? 'bg-bg-overlay text-text-primary'
+                            : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay/40'
+                        }`}
+                        onClick={(e) => { e.stopPropagation(); setTerminalWindowId(win.id) }}
+                      >
+                        <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: win.color }} />
+                        <span className="flex-1 truncate">{win.name}</span>
+                        {winCount > 0 && (
+                          <span className="text-[10px] text-text-muted/50 tabular-nums group-hover/win:hidden">{winCount}</span>
+                        )}
+                        <button
+                          className="opacity-0 group-hover/win:opacity-60 hover:!opacity-100 text-text-muted hover:text-accent-red leading-none p-0.5 rounded transition-opacity"
+                          title="Close window"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeGroupFromProject(project.id, win.id)
+                            window.api.removeGroup(project.id, win.id).catch(() => {})
+                            if (isActiveWin) setTerminalWindowId(null)
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )
+                  })}
+                  <button
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-text-muted/60 hover:text-text-muted hover:bg-bg-overlay/40 transition-all w-full mt-0.5"
+                    onClick={(e) => { e.stopPropagation(); requestNewWindow() }}
+                    title="New window (⌘N)"
+                  >
+                    <span className="leading-none">+</span>
+                    <span>New Window</span>
+                  </button>
+                </div>
+              )}
+            </React.Fragment>
           )
         })}
       </div>
