@@ -48,8 +48,10 @@ interface PtySession {
   lastOutputTime: number
   activityBytes: number  // bytes received since last idle-fire or writeToSession
   hadInput: boolean      // true after first real input (user or launch command)
-  currentCwd?: string    // live cwd from OSC 7 sequences
+  currentCwd?: string    // live cwd tracked via tmux polling
   pendingInputCheck: boolean  // true while async process-state check is in flight
+  tmuxName: string       // tmux session name for this PTY session
+  cwdPollInterval: NodeJS.Timeout | null
 }
 
 // Idle-based input-waiting detection: if a running session receives >= this
@@ -57,6 +59,57 @@ interface PtySession {
 // that the foreground program is genuinely blocked on stdin before alerting.
 const IDLE_MS = 1500
 const MIN_ACTIVITY_BYTES = 300
+
+// ─── tmux backend ─────────────────────────────────────────────────────────────
+// All sessions run inside a dedicated tmux server (socket: sessionmgr) so they
+// are completely isolated from the user's own tmux sessions. The server starts
+// automatically on the first tmux command and persists across app restarts,
+// keeping agent processes alive even when the Electron window is closed.
+
+const TMUX_SOCKET = 'sessionmgr'
+const TMUX_CONFIG_PATH = path.join(os.tmpdir(), 'sessionmanager-tmux.conf')
+
+function initTmuxConfig(): void {
+  const shell = getDefaultShell()
+  fs.writeFileSync(
+    TMUX_CONFIG_PATH,
+    'set -g status off\n' +
+    'set -g allow-passthrough all\n' +
+    'set -g history-limit 50000\n' +
+    'set -g window-size latest\n' +
+    'set -g mouse off\n' +
+    `set -g default-shell "${shell}"\n` +
+    `set -g default-command "exec ${shell} -l"\n`
+  )
+}
+
+function getTmuxName(id: string): string {
+  return `sm-${id}`
+}
+
+// Get the PID of the shell running inside the tmux pane (not the tmux client).
+function getTmuxPanePid(tmuxName: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    execFile(
+      'tmux',
+      ['-L', TMUX_SOCKET, 'list-panes', '-t', tmuxName, '-F', '#{pane_pid}'],
+      (err, stdout) => {
+        if (err) return resolve(null)
+        const pid = parseInt(stdout.trim(), 10)
+        resolve(isNaN(pid) ? null : pid)
+      }
+    )
+  })
+}
+
+// Returns true if the tmux session still exists (shell alive), false if it's gone.
+function isTmuxSessionAlive(tmuxName: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('tmux', ['-L', TMUX_SOCKET, 'has-session', '-t', tmuxName], (err) => {
+      resolve(!err)
+    })
+  })
+}
 
 // High-confidence patterns — unambiguous input prompts that fire instantly
 // without needing process-state verification. Deliberately excludes broad
@@ -83,10 +136,14 @@ function detectInstantPrompt(output: string): boolean {
 }
 
 // ─── OS-level process state check ──────────────────────────────────────────
-// Walk the pty's process tree to the leaf child, then check if it's sleeping
+// Walk the pane's process tree to the leaf child, then check if it's sleeping
 // in the foreground group (S+). When a process is blocked on read() from the
 // terminal it shows exactly this state. This is the hard gate that eliminates
 // false positives from idle detection.
+//
+// With tmux, we start the walk from the pane's shell PID (obtained via
+// list-panes #{pane_pid}), not the tmux client PID. The tmux client and server
+// are in a separate process tree that would otherwise dead-end the walk.
 
 function getLeafPid(pid: number): Promise<number> {
   return new Promise((resolve) => {
@@ -110,8 +167,10 @@ function isProcessSleepingInForeground(pid: number): Promise<boolean> {
   })
 }
 
-async function isChildProcessWaitingForInput(shellPid: number): Promise<boolean> {
+async function isChildProcessWaitingForInput(tmuxName: string): Promise<boolean> {
   try {
+    const shellPid = await getTmuxPanePid(tmuxName)
+    if (shellPid === null) return false
     const leafPid = await getLeafPid(shellPid)
     // If the leaf IS the shell, it's just a shell prompt — not a tool asking a question
     if (leafPid === shellPid) return false
@@ -133,42 +192,6 @@ function stripAnsiForExport(str: string): string {
 function getDefaultShell(): string {
   if (process.platform === 'win32') return 'powershell.exe'
   return process.env.SHELL || '/bin/bash'
-}
-
-// Lazily-created temp dir containing zsh rc files that inject our OSC 7 hook
-let _zshIntegrationDir: string | null = null
-function getZshIntegrationDir(): string {
-  const dir = path.join(os.tmpdir(), 'sessionmanager-zsh-integration')
-  // Re-check even if cached — macOS temp-dir cleanup can purge our files
-  // while the directory survives (zsh keeps .zsh_history alive).
-  if (_zshIntegrationDir && fs.existsSync(path.join(dir, '.zshrc'))) return _zshIntegrationDir
-  fs.mkdirSync(dir, { recursive: true })
-  // .zshenv: use _SM_ORIG_ZDOTDIR set by the parent process (ZDOTDIR is already our dir here)
-  fs.writeFileSync(
-    path.join(dir, '.zshenv'),
-    '[[ -f "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshenv" ]] && source "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshenv"\n'
-  )
-  // .zprofile: source user's .zprofile for login shells
-  fs.writeFileSync(
-    path.join(dir, '.zprofile'),
-    '[[ -f "${_SM_ORIG_ZDOTDIR:-$HOME}/.zprofile" ]] && source "${_SM_ORIG_ZDOTDIR:-$HOME}/.zprofile" 2>/dev/null || true\n'
-  )
-  // .zshrc: source user's .zshrc then append our OSC 7 precmd hook
-  fs.writeFileSync(
-    path.join(dir, '.zshrc'),
-    '[[ -f "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshrc" ]] && source "${_SM_ORIG_ZDOTDIR:-$HOME}/.zshrc" 2>/dev/null || true\n' +
-    '# Ensure Option+Arrow and Option+Delete word-nav bindings exist in all keymaps\n' +
-    'for _sm_km in emacs viins; do\n' +
-    '  bindkey -M "$_sm_km" "\\ef" forward-word 2>/dev/null\n' +
-    '  bindkey -M "$_sm_km" "\\eb" backward-word 2>/dev/null\n' +
-    '  bindkey -M "$_sm_km" "\\e\\x7f" backward-kill-word 2>/dev/null\n' +
-    '  bindkey -M "$_sm_km" "\\ed" kill-word 2>/dev/null\n' +
-    'done; unset _sm_km\n' +
-    '_sm_osc7() { printf "\\e]7;file://%s%s\\a" "${HOST:-$HOSTNAME}" "${PWD}"; }\n' +
-    'precmd_functions+=(_sm_osc7)\n'
-  )
-  _zshIntegrationDir = dir
-  return dir
 }
 
 function resolveHome(p: string): string {
@@ -199,6 +222,7 @@ export class SessionManager extends EventEmitter {
   }
 
   start(): void {
+    initTmuxConfig()
     // Batch IPC output at ~60fps (16ms windows)
     this.batchInterval = setInterval(() => {
       this.flushBatches()
@@ -250,7 +274,7 @@ export class SessionManager extends EventEmitter {
         now - session.lastOutputTime >= IDLE_MS
       ) {
         session.pendingInputCheck = true
-        isChildProcessWaitingForInput(session.pty.pid).then((waiting) => {
+        isChildProcessWaitingForInput(session.tmuxName).then((waiting) => {
           session.pendingInputCheck = false
           if (waiting && !session.inputWaiting) {
             session.inputWaiting = true
@@ -272,39 +296,42 @@ export class SessionManager extends EventEmitter {
   createSession(meta: SessionMeta): void {
     if (this.sessions.has(meta.id)) return  // already running — skip duplicate creation
     const resolvedCwd = resolveHome(meta.cwd)
-    let cwd = resolvedCwd
+    const cwd = fs.existsSync(resolvedCwd) ? resolvedCwd : os.homedir()
+    const tmuxName = getTmuxName(meta.id)
 
-    // Fall back to home dir if cwd doesn't exist
-    if (!fs.existsSync(cwd)) {
-      cwd = os.homedir()
-    }
-
-    const shell = getDefaultShell()
-    const args: string[] = []
-
-    if (process.platform !== 'win32') {
-      args.push('-l') // login shell for full PATH
-    }
-
-    const isZsh = shell.endsWith('/zsh') || shell === 'zsh'
     const env: Record<string, string | undefined> = {
       ...process.env,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       LANG: process.env.LANG || 'en_US.UTF-8',
     }
-    if (isZsh) {
-      env._SM_ORIG_ZDOTDIR = process.env.ZDOTDIR || os.homedir()
-      env.ZDOTDIR = getZshIntegrationDir()
-    }
 
-    const pty = nodePty.spawn(shell, args, {
-      name: 'xterm-256color',
-      cols: 220,
-      rows: 50,
-      cwd,
-      env: env as Record<string, string>
-    })
+    // Spawn a tmux client via node-pty. -A attaches to an existing session if
+    // it survived a previous app run (agent persistence), or creates a new one.
+    // The dedicated socket (-L sessionmgr) keeps our sessions isolated from the
+    // user's own tmux. The config is written once in start() and read on first
+    // server start for this socket.
+    const pty = nodePty.spawn(
+      'tmux',
+      [
+        '-L', TMUX_SOCKET,
+        '-f', TMUX_CONFIG_PATH,
+        'new-session', '-A', '-s', tmuxName,
+        '-c', cwd,
+        '-x', '220',
+        '-y', '50',
+        '-e', `TERM=xterm-256color`,
+        '-e', `COLORTERM=truecolor`,
+        '-e', `LANG=${env.LANG ?? 'en_US.UTF-8'}`,
+      ],
+      {
+        name: 'xterm-256color',
+        cols: 220,
+        rows: 50,
+        cwd,
+        env: env as Record<string, string>
+      }
+    )
 
     const session: PtySession = {
       pty,
@@ -315,10 +342,32 @@ export class SessionManager extends EventEmitter {
       pendingInputCheck: false,
       lastOutputTime: Date.now(),
       activityBytes: 0,
-      hadInput: !!meta.command  // launch-command sessions count as having input
+      hadInput: !!meta.command,  // launch-command sessions count as having input
+      tmuxName,
+      cwdPollInterval: null,
     }
 
     this.sessions.set(meta.id, session)
+
+    // Poll tmux for cwd every 2s. OSC 7 is consumed by tmux internally and
+    // never reaches the node-pty data handler, so we use display-message instead.
+    session.cwdPollInterval = setInterval(() => {
+      if (session.meta.status === 'exited') return
+      execFile(
+        'tmux',
+        ['-L', TMUX_SOCKET, 'display-message', '-p', '-t', tmuxName, '#{pane_current_path}'],
+        (err, stdout) => {
+          if (err) return
+          const newCwd = stdout.trim()
+          if (newCwd && newCwd !== session.currentCwd) {
+            session.currentCwd = newCwd
+            updateSessionCwd(meta.id, newCwd)
+            this.broadcast('terminal:cwd', { id: meta.id, cwd: newCwd })
+            this.emit('cwd', meta.id, newCwd)
+          }
+        }
+      )
+    }, 2000)
 
     pty.onData((data: string) => {
       session.batchBuffer += data
@@ -334,20 +383,6 @@ export class SessionManager extends EventEmitter {
 
       this.emit('output', meta.id, data)
 
-      // OSC 7 — cwd notification: \e]7;file://hostname/path\a (or \e\ ST terminator)
-      const osc7 = data.match(/\x1b\]7;file:\/\/([^\x07\x1b]*)(?:\x07|\x1b\\)/)
-      if (osc7) {
-        try {
-          const newCwd = decodeURIComponent(new URL('file://' + osc7[1]).pathname)
-          if (newCwd && newCwd !== session.currentCwd) {
-            session.currentCwd = newCwd
-            updateSessionCwd(meta.id, newCwd)  // persist so refresh restores last cwd
-            this.broadcast('terminal:cwd', { id: meta.id, cwd: newCwd })
-            this.emit('cwd', meta.id, newCwd)
-          }
-        } catch { /* malformed URL — ignore */ }
-      }
-
       // Fast-path pattern detection. Sticky: once we detect an instant prompt,
       // leave inputWaiting=true until user input clears it (writeToSession /
       // submitCommand). Clearing based on a 5-chunk sliding window caused
@@ -362,23 +397,44 @@ export class SessionManager extends EventEmitter {
     })
 
     pty.onExit(({ exitCode }) => {
-      session.meta.status = 'exited'
-      session.meta.exitCode = exitCode
-      this.broadcast('terminal:exit', { id: meta.id, code: exitCode })
-      this.emit('exit', meta.id, exitCode)
+      if (session.cwdPollInterval) {
+        clearInterval(session.cwdPollInterval)
+        session.cwdPollInterval = null
+      }
+      // The tmux client exiting doesn't mean the session is gone — the shell
+      // inside the pane may still be running. Only mark as exited if the tmux
+      // session itself no longer exists.
+      isTmuxSessionAlive(tmuxName).then((alive) => {
+        if (!alive) {
+          session.meta.status = 'exited'
+          session.meta.exitCode = exitCode
+          this.broadcast('terminal:exit', { id: meta.id, code: exitCode })
+          this.emit('exit', meta.id, exitCode)
+        }
+      })
     })
 
-    // If there's a launch command, send it after a brief delay
+    // If there's a launch command, send it after tmux is ready.
+    // 600ms gives the tmux server cold-start time on first session.
     if (meta.command) {
       setTimeout(() => {
         pty.write(meta.command! + '\r')
-      }, 300)
+      }, 600)
     }
   }
 
   destroySession(id: string): void {
     const session = this.sessions.get(id)
     if (!session) return
+
+    if (session.cwdPollInterval) {
+      clearInterval(session.cwdPollInterval)
+      session.cwdPollInterval = null
+    }
+
+    // Kill the tmux session first so the shell inside the pane is terminated,
+    // then kill the client PTY.
+    execFile('tmux', ['-L', TMUX_SOCKET, 'kill-session', '-t', session.tmuxName], () => {})
 
     try {
       session.pty.kill()
@@ -430,6 +486,13 @@ export class SessionManager extends EventEmitter {
     try {
       if (cols > 0 && rows > 0) {
         session.pty.resize(cols, rows)
+        // Also resize the tmux window explicitly — required when no client is
+        // attached (detached sessions) since tmux can't infer size from the PTY.
+        execFile(
+          'tmux',
+          ['-L', TMUX_SOCKET, 'resize-window', '-t', session.tmuxName, '-x', String(cols), '-y', String(rows)],
+          () => {}
+        )
       }
     } catch {
       // Ignore resize errors on dead pty
@@ -504,6 +567,8 @@ export class SessionManager extends EventEmitter {
 
   killAll(): void {
     for (const [, session] of this.sessions) {
+      if (session.cwdPollInterval) clearInterval(session.cwdPollInterval)
+      execFile('tmux', ['-L', TMUX_SOCKET, 'kill-session', '-t', session.tmuxName], () => {})
       try {
         session.pty.kill('SIGTERM')
       } catch {
