@@ -31,6 +31,13 @@ export interface ServerConfig {
   token: string
 }
 
+export interface WindowGroup {
+  id: string
+  name: string
+  color: string | null
+  order: number
+}
+
 export type TaskStatus = 'backlog' | 'in-progress' | 'done'
 
 export interface TaskItem {

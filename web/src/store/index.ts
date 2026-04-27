@@ -1,8 +1,30 @@
 import { create } from 'zustand'
-import type { Project, SessionStatus, ServerConfig, TaskItem } from '../types'
+import type { Project, SessionStatus, ServerConfig, TaskItem, WindowGroup } from '../types'
 
 const STORAGE_KEY = 'sessionmanager_config'
+const WG_STORAGE_KEY = 'sessionmanager_window_groups'
 const MAX_LOG_LINES = 150
+
+interface WGData {
+  groups: Record<string, WindowGroup[]>
+  assignments: Record<string, string | null>
+}
+
+function loadWGData(): WGData {
+  try {
+    const r = localStorage.getItem(WG_STORAGE_KEY)
+    return r ? JSON.parse(r) : { groups: {}, assignments: {} }
+  } catch {
+    return { groups: {}, assignments: {} }
+  }
+}
+
+function saveWGData(
+  groups: Record<string, WindowGroup[]>,
+  assignments: Record<string, string | null>
+) {
+  localStorage.setItem(WG_STORAGE_KEY, JSON.stringify({ groups, assignments }))
+}
 
 // ANSI escape sequence stripper
 function stripAnsi(str: string): string {
@@ -63,6 +85,11 @@ interface AppState {
   projectTasks: Record<string, TaskItem[]>
   sessionNotesEditor: { projectId: string; sessionId: string } | null
 
+  // Window groups
+  windowGroups: Record<string, WindowGroup[]>
+  sessionWindowGroup: Record<string, string | null>
+  activeWindowGroupId: Record<string, string>
+
   // Actions — connection
   setConfig: (config: ServerConfig | null) => void
   setConnected: (connected: boolean) => void
@@ -100,6 +127,16 @@ interface AppState {
   updateTaskInProject: (projectId: string, taskId: string, updates: Partial<TaskItem>) => void
   removeTaskFromProject: (projectId: string, taskId: string) => void
 
+  // Actions — window groups
+  createWindowGroup: (projectId: string, name: string, color?: string | null) => void
+  updateWindowGroup: (projectId: string, groupId: string, updates: Partial<Pick<WindowGroup, 'name' | 'color' | 'order'>>) => void
+  deleteWindowGroup: (projectId: string, groupId: string) => void
+  reorderWindowGroups: (projectId: string, groups: WindowGroup[]) => void
+  assignSessionToGroup: (sessionId: string, groupId: string | null) => void
+  setActiveWindowGroupId: (projectId: string, groupId: string) => void
+  getActiveWindowGroupId: (projectId: string) => string
+  getWindowGroupsForProject: (projectId: string) => WindowGroup[]
+
   // Helpers
   getActiveProject: () => Project | null
   getSessionsForActiveProject: () => SessionStatus[]
@@ -123,6 +160,8 @@ function buildPreviewLines(existing: string[], newData: string): string[] {
   return kept.slice(-6)
 }
 
+const wgData = loadWGData()
+
 export const useAppStore = create<AppState>((set, get) => ({
   config: loadConfig(),
   connected: false,
@@ -137,6 +176,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessionQueueRunning: {},
   projectTasks: {},
   sessionNotesEditor: null,
+  windowGroups: wgData.groups,
+  sessionWindowGroup: wgData.assignments,
+  activeWindowGroupId: {},
 
   setConfig: (config) => {
     if (config) {
@@ -419,6 +461,82 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
+  // Window group actions
+  createWindowGroup: (projectId, name, color = null) => {
+    set((state) => {
+      const existing = state.windowGroups[projectId] ?? []
+      const newGroup: WindowGroup = { id: crypto.randomUUID(), name, color, order: existing.length }
+      const updated = { ...state.windowGroups, [projectId]: [...existing, newGroup] }
+      saveWGData(updated, state.sessionWindowGroup)
+      return { windowGroups: updated }
+    })
+  },
+
+  updateWindowGroup: (projectId, groupId, updates) => {
+    set((state) => {
+      const existing = state.windowGroups[projectId] ?? []
+      const updatedGroups = existing.map((g) => (g.id === groupId ? { ...g, ...updates } : g))
+      const updated = { ...state.windowGroups, [projectId]: updatedGroups }
+      saveWGData(updated, state.sessionWindowGroup)
+      return { windowGroups: updated }
+    })
+  },
+
+  deleteWindowGroup: (projectId, groupId) => {
+    set((state) => {
+      const existing = state.windowGroups[projectId] ?? []
+      const updatedGroups = existing.filter((g) => g.id !== groupId).map((g, i) => ({ ...g, order: i }))
+      const updatedWG = { ...state.windowGroups, [projectId]: updatedGroups }
+
+      // Clear assignments pointing to deleted group
+      const updatedAssignments = { ...state.sessionWindowGroup }
+      for (const [sid, gid] of Object.entries(updatedAssignments)) {
+        if (gid === groupId) updatedAssignments[sid] = null
+      }
+
+      // Reset active group if it was deleted
+      const updatedActive = { ...state.activeWindowGroupId }
+      if (updatedActive[projectId] === groupId) {
+        updatedActive[projectId] = 'general'
+      }
+
+      saveWGData(updatedWG, updatedAssignments)
+      return {
+        windowGroups: updatedWG,
+        sessionWindowGroup: updatedAssignments,
+        activeWindowGroupId: updatedActive,
+      }
+    })
+  },
+
+  reorderWindowGroups: (projectId, groups) => {
+    set((state) => {
+      const updated = { ...state.windowGroups, [projectId]: groups }
+      saveWGData(updated, state.sessionWindowGroup)
+      return { windowGroups: updated }
+    })
+  },
+
+  assignSessionToGroup: (sessionId, groupId) => {
+    set((state) => {
+      const updatedAssignments = { ...state.sessionWindowGroup, [sessionId]: groupId }
+      saveWGData(state.windowGroups, updatedAssignments)
+      return { sessionWindowGroup: updatedAssignments }
+    })
+  },
+
+  setActiveWindowGroupId: (projectId, groupId) =>
+    set((state) => ({
+      activeWindowGroupId: { ...state.activeWindowGroupId, [projectId]: groupId },
+    })),
+
+  getActiveWindowGroupId: (projectId) => get().activeWindowGroupId[projectId] ?? 'general',
+
+  getWindowGroupsForProject: (projectId) => {
+    const groups = get().windowGroups[projectId] ?? []
+    return [...groups].sort((a, b) => a.order - b.order)
+  },
+
   getActiveProject: () => {
     const { projects, activeProjectId } = get()
     if (!activeProjectId) return projects[0] ?? null
@@ -426,7 +544,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   getSessionsForActiveProject: () => {
-    const project = get().getActiveProject()
-    return (project?.sessions ?? []).filter((s) => !s.parentSessionId)
+    const { projects, activeProjectId, sessionWindowGroup, activeWindowGroupId } = get()
+    const project = activeProjectId
+      ? projects.find((p) => p.id === activeProjectId) ?? projects[0] ?? null
+      : projects[0] ?? null
+    if (!project) return []
+    const allTopLevel = project.sessions.filter((s) => !s.parentSessionId)
+    const groupId = activeWindowGroupId[project.id] ?? 'general'
+    if (groupId === 'general') {
+      return allTopLevel.filter((s) => !sessionWindowGroup[s.id])
+    }
+    return allTopLevel.filter((s) => sessionWindowGroup[s.id] === groupId)
   },
 }))

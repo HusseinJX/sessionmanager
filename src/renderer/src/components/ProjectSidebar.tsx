@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useAppStore } from '../store'
 
+const GROUP_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#ec4899','#06b6d4']
+
+let dragSession: { sessionId: string; fromGroupId: string | null } | null = null
+let dragGroupId: string | null = null
+
 function FolderIcon({ className }: { className?: string }): React.ReactElement {
   return (
     <svg className={className} width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -33,20 +38,31 @@ export default function ProjectSidebar(): React.ReactElement {
     activeProjectId,
     sessionStates,
     settings,
-    isTerminalMode,
     activeTerminalWindowId,
+    terminalModeSessionId,
     setActiveProject,
     setTerminalWindowId,
+    setTerminalModeSession,
     requestNewWindow,
     removeGroupFromProject,
     setShowAddProjectModal,
     removeProject,
     renameProject,
+    setSessionGroupId,
+    reorderSessionsInProject,
+    reorderGroupsInProject,
+    updateGroupInProject,
   } = useAppStore()
 
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
+
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [colorPickerGroupId, setColorPickerGroupId] = useState<string | null>(null)
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null)
+  const [renameGroupValue, setRenameGroupValue] = useState('')
+  const groupRenameInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (renamingId && renameInputRef.current) {
@@ -54,6 +70,20 @@ export default function ProjectSidebar(): React.ReactElement {
       renameInputRef.current.select()
     }
   }, [renamingId])
+
+  useEffect(() => {
+    if (renamingGroupId && groupRenameInputRef.current) {
+      groupRenameInputRef.current.focus()
+      groupRenameInputRef.current.select()
+    }
+  }, [renamingGroupId])
+
+  useEffect(() => {
+    if (!colorPickerGroupId) return
+    const handler = (): void => setColorPickerGroupId(null)
+    window.addEventListener('mousedown', handler)
+    return () => window.removeEventListener('mousedown', handler)
+  }, [colorPickerGroupId])
 
   const handleRenameStart = (id: string, currentName: string): void => {
     setRenamingId(id)
@@ -129,7 +159,7 @@ export default function ProjectSidebar(): React.ReactElement {
                 `}
                 onClick={() => {
                   setActiveProject(project.id)
-                  if (isTerminalMode) setTerminalWindowId(null)
+                  setTerminalWindowId(null)
                 }}
                 onDoubleClick={() => handleRenameStart(project.id, project.name)}
               >
@@ -184,44 +214,307 @@ export default function ProjectSidebar(): React.ReactElement {
                 </div>
               </div>
 
-              {/* Windows (groups) — shown in terminal mode under the active project */}
-              {isTerminalMode && isActive && (
+              {/* Windows (groups) + tabs — shown in terminal mode under the active project */}
+              {isActive && (
                 <div className="ml-3 mb-1 border-l border-border-subtle/50 pl-2">
-                  {windows.map((win) => {
-                    const winCount = project.sessions.filter(
-                      (s) => s.groupId === win.id && !s.parentSessionId
-                    ).length
-                    const isActiveWin = activeTerminalWindowId === win.id
+
+                  {/* General — ungrouped sessions */}
+                  {(() => {
+                    const ungrouped = project.sessions.filter((s) => !s.parentSessionId && !s.groupId)
+                    const isActiveWin = activeTerminalWindowId === null
+                    if (ungrouped.length === 0 && windows.length > 0) return null
+                    const isDropHere = dropTarget === 'general'
                     return (
-                      <div
-                        key={win.id}
-                        className={`group/win flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-xs transition-all mb-0.5 ${
-                          isActiveWin
-                            ? 'bg-bg-overlay text-text-primary'
-                            : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay/40'
-                        }`}
-                        onClick={(e) => { e.stopPropagation(); setTerminalWindowId(win.id) }}
-                      >
-                        <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: win.color }} />
-                        <span className="flex-1 truncate">{win.name}</span>
-                        {winCount > 0 && (
-                          <span className="text-[10px] text-text-muted/50 tabular-nums group-hover/win:hidden">{winCount}</span>
-                        )}
-                        <button
-                          className="opacity-0 group-hover/win:opacity-60 hover:!opacity-100 text-text-muted hover:text-accent-red leading-none p-0.5 rounded transition-opacity"
-                          title="Close window"
-                          onClick={(e) => {
+                      <>
+                        <div
+                          className={`group/win flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-xs transition-all mb-0.5 ${
+                            isActiveWin ? 'bg-bg-overlay text-text-primary' : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay/40'
+                          } ${isDropHere ? 'ring-1 ring-accent-blue/60' : ''}`}
+                          onClick={(e) => { e.stopPropagation(); setTerminalWindowId(null) }}
+                          onDragOver={(e) => {
+                            if (dragSession) {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              setDropTarget('general')
+                            }
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault()
                             e.stopPropagation()
-                            removeGroupFromProject(project.id, win.id)
-                            window.api.removeGroup(project.id, win.id).catch(() => {})
-                            if (isActiveWin) setTerminalWindowId(null)
+                            if (!dragSession) return
+                            const { sessionId, fromGroupId } = dragSession
+                            if (fromGroupId !== null) {
+                              setSessionGroupId(project.id, sessionId, null)
+                              window.api.setSessionGroup(project.id, sessionId, null).catch(() => {})
+                            }
+                            setTerminalWindowId(null)
+                            dragSession = null
+                            setDropTarget(null)
                           }}
                         >
-                          ×
-                        </button>
-                      </div>
+                          <span className="w-2 h-2 rounded-sm flex-shrink-0 bg-border-subtle" />
+                          <span className="flex-1 truncate">General</span>
+                          {ungrouped.length > 0 && (
+                            <span className="text-[10px] text-text-muted/50 tabular-nums">{ungrouped.length}</span>
+                          )}
+                        </div>
+                        {ungrouped.map((s) => {
+                          const rs = sessionStates[s.id]
+                          const isActiveTab = terminalModeSessionId === s.id && isActiveWin
+                          const dotCls = rs?.inputWaiting
+                            ? 'bg-accent-red animate-ping'
+                            : rs?.status === 'exited' ? 'bg-accent-red' : 'bg-accent-green'
+                          const isDropOnTab = dropTarget === s.id
+                          return (
+                            <div
+                              key={s.id}
+                              draggable
+                              className={`flex items-center gap-1.5 pl-4 pr-2 py-1 rounded-md cursor-pointer text-[11px] transition-all mb-0.5 ${
+                                isActiveTab ? 'bg-accent-green/10 text-text-primary' : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay/30'
+                              } ${isDropOnTab ? 'border-t border-accent-blue' : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setTerminalWindowId(null); setTerminalModeSession(s.id) }}
+                              onDragStart={(e) => {
+                                dragSession = { sessionId: s.id, fromGroupId: null }
+                                dragGroupId = null
+                                e.dataTransfer.effectAllowed = 'move'
+                                e.stopPropagation()
+                              }}
+                              onDragEnd={() => { dragSession = null; dragGroupId = null; setDropTarget(null) }}
+                              onDragOver={(e) => {
+                                if (dragSession && dragSession.sessionId !== s.id) {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  setDropTarget(s.id)
+                                }
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                if (!dragSession) return
+                                const { sessionId, fromGroupId } = dragSession
+                                if (fromGroupId !== null) {
+                                  setSessionGroupId(project.id, sessionId, null)
+                                  window.api.setSessionGroup(project.id, sessionId, null).catch(() => {})
+                                }
+                                const allTopLevel = project.sessions.filter((s2) => !s2.parentSessionId)
+                                const ids = allTopLevel.map((s2) => s2.id).filter((id) => id !== sessionId)
+                                const targetIdx = ids.indexOf(s.id)
+                                if (targetIdx !== -1) {
+                                  ids.splice(targetIdx, 0, sessionId)
+                                  reorderSessionsInProject(project.id, ids)
+                                  window.api.reorderSessions(project.id, ids).catch(() => {})
+                                }
+                                dragSession = null
+                                setDropTarget(null)
+                              }}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotCls}`} />
+                              <span className="flex-1 truncate">{s.name}</span>
+                            </div>
+                          )
+                        })}
+                      </>
+                    )
+                  })()}
+
+                  {/* Named windows */}
+                  {windows.map((win) => {
+                    const winSessions = project.sessions.filter(
+                      (s) => s.groupId === win.id && !s.parentSessionId
+                    )
+                    const isActiveWin = activeTerminalWindowId === win.id
+                    const isDropHere = dropTarget === win.id
+                    return (
+                      <React.Fragment key={win.id}>
+                        <div
+                          draggable
+                          className={`group/win flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer text-xs transition-all mb-0.5 ${
+                            isActiveWin
+                              ? 'bg-bg-overlay text-text-primary'
+                              : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay/40'
+                          } ${isDropHere ? 'ring-1 ring-accent-blue/60' : ''}`}
+                          onClick={(e) => { e.stopPropagation(); setTerminalWindowId(win.id) }}
+                          onDragStart={(e) => {
+                            dragGroupId = win.id
+                            dragSession = null
+                            e.dataTransfer.effectAllowed = 'move'
+                            e.stopPropagation()
+                          }}
+                          onDragEnd={() => { dragSession = null; dragGroupId = null; setDropTarget(null) }}
+                          onDragOver={(e) => {
+                            if (dragSession || (dragGroupId && dragGroupId !== win.id)) {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              setDropTarget(win.id)
+                            }
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            if (dragSession) {
+                              const { sessionId, fromGroupId } = dragSession
+                              if (fromGroupId !== win.id) {
+                                setSessionGroupId(project.id, sessionId, win.id)
+                                window.api.setSessionGroup(project.id, sessionId, win.id).catch(() => {})
+                              }
+                              setTerminalWindowId(win.id)
+                            } else if (dragGroupId && dragGroupId !== win.id) {
+                              const ids = windows.map((g) => g.id).filter((id) => id !== dragGroupId)
+                              const targetIdx = ids.indexOf(win.id)
+                              if (targetIdx !== -1) {
+                                ids.splice(targetIdx, 0, dragGroupId)
+                                reorderGroupsInProject(project.id, ids)
+                                window.api.reorderGroups(project.id, ids).catch(() => {})
+                              }
+                            }
+                            dragSession = null
+                            dragGroupId = null
+                            setDropTarget(null)
+                          }}
+                        >
+                          <div className="relative flex-shrink-0">
+                            <button
+                              className="w-2.5 h-2.5 rounded-sm flex-shrink-0 hover:scale-110 transition-transform block"
+                              style={{ backgroundColor: win.color }}
+                              title="Change color"
+                              onClick={(e) => { e.stopPropagation(); setColorPickerGroupId(colorPickerGroupId === win.id ? null : win.id) }}
+                            />
+                            {colorPickerGroupId === win.id && (
+                              <div
+                                className="absolute left-full top-0 ml-2 z-50 bg-bg-card border border-border-subtle rounded-lg p-1.5 flex flex-wrap gap-1 w-[116px] shadow-xl"
+                                onMouseDown={(e) => e.stopPropagation()}
+                              >
+                                {GROUP_COLORS.map((c) => (
+                                  <button
+                                    key={c}
+                                    className={`w-6 h-6 rounded-full hover:scale-110 transition-transform ${win.color === c ? 'ring-2 ring-offset-1 ring-offset-bg-card ring-white' : ''}`}
+                                    style={{ background: c }}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      updateGroupInProject(project.id, win.id, { color: c })
+                                      window.api.updateGroup(project.id, win.id, { color: c }).catch(() => {})
+                                      setColorPickerGroupId(null)
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {renamingGroupId === win.id ? (
+                            <input
+                              ref={groupRenameInputRef}
+                              className="flex-1 bg-transparent text-xs outline-none border-b border-accent-blue text-text-primary min-w-0"
+                              value={renameGroupValue}
+                              onChange={(e) => setRenameGroupValue(e.target.value)}
+                              onBlur={() => {
+                                const trimmed = renameGroupValue.trim()
+                                if (trimmed) {
+                                  updateGroupInProject(project.id, win.id, { name: trimmed })
+                                  window.api.updateGroup(project.id, win.id, { name: trimmed }).catch(() => {})
+                                }
+                                setRenamingGroupId(null)
+                              }}
+                              onKeyDown={(e) => {
+                                e.stopPropagation()
+                                if (e.key === 'Enter') {
+                                  const trimmed = renameGroupValue.trim()
+                                  if (trimmed) {
+                                    updateGroupInProject(project.id, win.id, { name: trimmed })
+                                    window.api.updateGroup(project.id, win.id, { name: trimmed }).catch(() => {})
+                                  }
+                                  setRenamingGroupId(null)
+                                }
+                                if (e.key === 'Escape') setRenamingGroupId(null)
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <span
+                              className="flex-1 truncate"
+                              onDoubleClick={(e) => {
+                                e.stopPropagation()
+                                setRenamingGroupId(win.id)
+                                setRenameGroupValue(win.name)
+                              }}
+                            >
+                              {win.name}
+                            </span>
+                          )}
+                          {winSessions.length > 0 && (
+                            <span className="text-[10px] text-text-muted/50 tabular-nums group-hover/win:hidden">{winSessions.length}</span>
+                          )}
+                          <button
+                            className="opacity-0 group-hover/win:opacity-60 hover:!opacity-100 text-text-muted hover:text-accent-red leading-none p-0.5 rounded transition-opacity"
+                            title="Close window"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              removeGroupFromProject(project.id, win.id)
+                              window.api.removeGroup(project.id, win.id).catch(() => {})
+                              if (isActiveWin) setTerminalWindowId(null)
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        {winSessions.map((s) => {
+                          const rs = sessionStates[s.id]
+                          const isActiveTab = terminalModeSessionId === s.id && isActiveWin
+                          const dotCls = rs?.inputWaiting
+                            ? 'bg-accent-red animate-ping'
+                            : rs?.status === 'exited' ? 'bg-accent-red' : 'bg-accent-green'
+                          const isDropOnTab = dropTarget === s.id
+                          return (
+                            <div
+                              key={s.id}
+                              draggable
+                              className={`flex items-center gap-1.5 pl-4 pr-2 py-1 rounded-md cursor-pointer text-[11px] transition-all mb-0.5 ${
+                                isActiveTab ? 'bg-accent-green/10 text-text-primary' : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay/30'
+                              } ${isDropOnTab ? 'border-t border-accent-blue' : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setTerminalWindowId(win.id); setTerminalModeSession(s.id) }}
+                              onDragStart={(e) => {
+                                dragSession = { sessionId: s.id, fromGroupId: win.id }
+                                dragGroupId = null
+                                e.dataTransfer.effectAllowed = 'move'
+                                e.stopPropagation()
+                              }}
+                              onDragEnd={() => { dragSession = null; dragGroupId = null; setDropTarget(null) }}
+                              onDragOver={(e) => {
+                                if (dragSession && dragSession.sessionId !== s.id) {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  setDropTarget(s.id)
+                                }
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                if (!dragSession) return
+                                const { sessionId, fromGroupId } = dragSession
+                                if (fromGroupId !== win.id) {
+                                  setSessionGroupId(project.id, sessionId, win.id)
+                                  window.api.setSessionGroup(project.id, sessionId, win.id).catch(() => {})
+                                }
+                                const allTopLevel = project.sessions.filter((s2) => !s2.parentSessionId)
+                                const ids = allTopLevel.map((s2) => s2.id).filter((id) => id !== sessionId)
+                                const targetIdx = ids.indexOf(s.id)
+                                if (targetIdx !== -1) {
+                                  ids.splice(targetIdx, 0, sessionId)
+                                  reorderSessionsInProject(project.id, ids)
+                                  window.api.reorderSessions(project.id, ids).catch(() => {})
+                                }
+                                dragSession = null
+                                setDropTarget(null)
+                              }}
+                            >
+                              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dotCls}`} />
+                              <span className="flex-1 truncate">{s.name}</span>
+                            </div>
+                          )
+                        })}
+                      </React.Fragment>
                     )
                   })}
+
                   <button
                     className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-text-muted/60 hover:text-text-muted hover:bg-bg-overlay/40 transition-all w-full mt-0.5"
                     onClick={(e) => { e.stopPropagation(); requestNewWindow() }}

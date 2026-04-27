@@ -1,16 +1,12 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect } from 'react'
 import { useAppStore } from './store'
 import { matchesBinding } from './keybindings'
 import ProjectSidebar from './components/ProjectSidebar'
-import TerminalGrid from './components/TerminalGrid'
-import FullTerminal from './components/FullTerminal'
 import AddSessionModal from './components/AddSessionModal'
 import AddProjectModal from './components/AddProjectModal'
 import ConfigPanel from './components/ConfigPanel'
-import PlannerBoard from './components/PlannerBoard'
 import SessionNotesModal from './components/SessionNotesModal'
 import TerminalModeView from './components/TerminalModeView'
-import JournalPanel from './components/JournalPanel'
 import type { Project } from './store'
 
 declare global {
@@ -158,105 +154,38 @@ function playAlertChime(): void {
   }
 }
 
-// ── Keyboard navigation helpers ───────────────────────────────────────
-
 function switchProject(dir: -1 | 1): void {
-  const { projects, activeProjectId, setActiveProject, setFocusedCardIndex } = useAppStore.getState()
+  const { projects, activeProjectId, setActiveProject } = useAppStore.getState()
   if (projects.length === 0) return
   const idx = projects.findIndex((p) => p.id === activeProjectId)
   const next = (idx + dir + projects.length) % projects.length
   setActiveProject(projects[next].id)
-  setFocusedCardIndex(null)
-}
-
-function moveCardFocus(total: number, dx: number, dy: number, cols: number): void {
-  const { focusedCardIndex, setFocusedCardIndex } = useAppStore.getState()
-  const cur = focusedCardIndex ?? -1
-
-  if (dy !== 0) {
-    const next = cur + dy * cols
-    if (next >= 0 && next < total) setFocusedCardIndex(next)
-    else if (cur === -1) setFocusedCardIndex(0)
-    return
-  }
-
-  // horizontal
-  if (cur === -1) {
-    setFocusedCardIndex(dx > 0 ? 0 : total - 1)
-  } else {
-    const next = (cur + dx + total) % total
-    setFocusedCardIndex(next)
-  }
-}
-
-function getGridCols(layoutMode: string): number {
-  switch (layoutMode) {
-    case '1': return 1
-    case '2': return 2
-    case '3': return 3
-    default: return Math.max(1, Math.floor(window.innerWidth / 340))
-  }
-}
-
-function handleQuickTerminal(): void {
-  const state = useAppStore.getState()
-  const project = state.getActiveProject()
-  if (!project) return
-  const sessions = state.getSessionsForActiveProject()
-  const lastCwd = sessions.at(-1)?.cwd
-  if (lastCwd) {
-    const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
-    window.api.addSessionToStore(project.id, { name, cwd: lastCwd }).then((stored) => {
-      const s = useAppStore.getState()
-      s.addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd })
-      s.initSessionState(stored.id, project.id)
-      return window.api.createTerminal({ id: stored.id, name, cwd: lastCwd, projectId: project.id })
-    }).catch((err) => console.error('Failed to create session:', err))
-  } else {
-    state.setShowAddSessionModal(true)
-  }
 }
 
 export default function App(): React.ReactElement {
   const {
-    projects,
-    expandedSessionId,
     showAddSessionModal,
     showAddProjectModal,
     showConfigPanel,
     sessionNotesEditor,
-    isTerminalMode,
     setProjects,
     setActiveProject,
-    activeProjectId,
-    setExpandedSession,
     initSessionState,
     updateSessionStatus,
     setInputWaiting,
     updateSessionCwd,
-    appendPreviewLine,
     setSettings,
   } = useAppStore()
 
-  const startInTerminalMode = new URLSearchParams(window.location.search).get('terminalMode') === '1'
-  // Standalone windows (Cmd+N) start fresh — no shared sessions
   const isStandalone = new URLSearchParams(window.location.search).get('standalone') === '1'
 
-  // Listen for menu Cmd+N and open same-type window (only in window/terminal mode)
   useEffect(() => {
     const remove = window.api.onMenuNewWindow(() => {
-      const state = useAppStore.getState()
-      if (!state.settings.windowMode && !state.isTerminalMode) return
-      if (state.isTerminalMode) {
-        state.requestNewWindow()
-      } else {
-        window.api.newWindow({ terminalMode: false })
-      }
+      useAppStore.getState().requestNewWindow()
     })
     return remove
   }, [])
 
-  // Load initial state from main process and restart all pty processes
   useEffect(() => {
     async function loadInitialState(): Promise<void> {
       try {
@@ -282,14 +211,11 @@ export default function App(): React.ReactElement {
           }
         }
 
-        // Auto-enter terminal mode if launched with ?terminalMode=1
-        if (startInTerminalMode) {
-          const allSessions = isStandalone
-            ? []
-            : (state.projects ?? []).flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
-          useAppStore.getState().setTerminalModeSession(allSessions[0]?.id ?? null)
-          useAppStore.getState().setTerminalMode(true)
-        }
+        const allSessions = isStandalone
+          ? []
+          : (state.projects ?? []).flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
+        useAppStore.getState().setTerminalModeSession(allSessions[0]?.id ?? null)
+        useAppStore.getState().setTerminalMode(true)
       } catch (err) {
         console.error('Failed to load initial state:', err)
       }
@@ -297,17 +223,9 @@ export default function App(): React.ReactElement {
     loadInitialState()
   }, [])
 
-  // Subscribe to terminal output events
   useEffect(() => {
-    const removeOutput = window.api.onOutput(({ id, data }) => {
-      appendPreviewLine(id, data)
-    })
-
     const removeExit = window.api.onExit(({ id, code }) => {
       updateSessionStatus(id, 'exited', code)
-
-      // When a session exits, stop auto-advance and mark any in-progress task as done.
-      // (A dead pty can't accept more input, so the queue can't continue.)
       const state = useAppStore.getState()
       if (state.sessionQueueRunning[id]) {
         state.setSessionQueueRunning(id, false)
@@ -330,26 +248,17 @@ export default function App(): React.ReactElement {
 
     const removeInputWaiting = window.api.onInputWaiting(({ id, isInstant }) => {
       setInputWaiting(id, true)
-      // Play chime unless the user already has this exact terminal expanded and visible
-      const { expandedSessionId } = useAppStore.getState()
-      const terminalIsOpen = expandedSessionId === id && !document.hidden
-      if (!terminalIsOpen) {
-        playAlertChime()
-      }
-
       const state = useAppStore.getState()
+      const activeTerminal = state.terminalModeSessionId === id && !document.hidden
+      if (!activeTerminal) playAlertChime()
+
       if (!state.sessionQueueRunning[id]) return
 
       if (isInstant) {
-        // Intermediate prompt (trust dialog, y/n, arrow keys) — auto-answer with Enter
-        // without advancing the queue. The queue advances on the next idle-based fire
-        // once the process actually returns to the shell prompt.
         void window.api.submitCommand(id, '')
         return
       }
 
-      // Idle-based: the in-progress task has returned to the shell prompt.
-      // Mark it done and send the next backlog task.
       const project = state.projects.find((p) => p.sessions.some((s) => s.id === id))
       if (!project) return
       const tasks = project.tasks ?? []
@@ -378,42 +287,26 @@ export default function App(): React.ReactElement {
       setInputWaiting(id, false)
     })
 
-    const removeFocusSession = window.api.onFocusSession(({ id }) => {
-      setExpandedSession(id)
-    })
-
     const removeCwd = window.api.onCwd(({ id, cwd }) => {
       updateSessionCwd(id, cwd)
     })
 
     return () => {
-      removeOutput()
       removeExit()
       removeInputWaiting()
       removeInputResolved()
-      removeFocusSession()
       removeCwd()
     }
-  }, [appendPreviewLine, updateSessionStatus, setInputWaiting, updateSessionCwd])
+  }, [updateSessionStatus, setInputWaiting, updateSessionCwd])
 
-  // ── Global keyboard handler ─────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       const state = useAppStore.getState()
       const kb = state.settings.keybindingOverrides ?? {}
-
-      // Never intercept when a text input / textarea is focused
-      // (unless it's Escape or a Cmd+combo)
       const tag = (document.activeElement as HTMLElement)?.tagName
       const inInput = tag === 'INPUT' || tag === 'TEXTAREA'
 
-      // ── Escape: always collapse expanded view / close modals ────────
       if (matchesBinding(e, 'nav.collapse', kb)) {
-        if (state.expandedSessionId) {
-          e.preventDefault()
-          state.setExpandedSession(null)
-          return
-        }
         if (state.showConfigPanel) {
           e.preventDefault()
           state.setShowConfigPanel(false)
@@ -425,51 +318,26 @@ export default function App(): React.ReactElement {
           state.setShowAddProjectModal(false)
           return
         }
-        // Clear card focus
-        if (state.focusedCardIndex !== null) {
-          state.setFocusedCardIndex(null)
-          return
-        }
         return
       }
 
-      // ── App-wide shortcuts (even when FullTerminal is open) ─────────
       if (matchesBinding(e, 'app.settings', kb)) {
         e.preventDefault()
         state.setShowConfigPanel(!state.showConfigPanel)
         return
       }
 
-      // Don't handle further shortcuts when modals are open
       if (state.showConfigPanel || state.showAddSessionModal || state.showAddProjectModal) return
-
-      // Don't handle grid/app shortcuts when FullTerminal is open (it has its own handler)
-      if (state.expandedSessionId) return
-
-      // Don't intercept bare keys when typing in an input
       if (inInput && !e.metaKey && !e.ctrlKey) return
 
-      // ── App shortcuts ───────────────────────────────────────────────
-      // Cmd+N: in terminal mode add a new tab; in window mode open a new window
       if (e.metaKey && e.key === 'n' && !e.shiftKey && !e.altKey && !e.ctrlKey) {
-        if (state.isTerminalMode) {
-          e.preventDefault()
-          state.requestNewWindow()
-          return
-        }
-        if (state.settings.windowMode) {
-          e.preventDefault()
-          window.api.newWindow({ terminalMode: false })
-          return
-        }
+        e.preventDefault()
+        state.requestNewWindow()
+        return
       }
       if (matchesBinding(e, 'app.newTerminal', kb)) {
         e.preventDefault()
-        if (state.isTerminalMode) {
-          state.requestNewTab()
-        } else {
-          handleQuickTerminal()
-        }
+        state.requestNewTab()
         return
       }
       if (matchesBinding(e, 'app.newProject', kb)) {
@@ -486,8 +354,6 @@ export default function App(): React.ReactElement {
         }
         return
       }
-
-      // ── Project tab navigation ──────────────────────────────────────
       if (matchesBinding(e, 'nav.prevProject', kb)) {
         e.preventDefault()
         switchProject(-1)
@@ -498,278 +364,25 @@ export default function App(): React.ReactElement {
         switchProject(1)
         return
       }
-
-      // ── Card grid navigation ────────────────────────────────────────
-      if (inInput) return // bare arrow keys should still work in inputs
-      const sessions = state.getSessionsForActiveProject()
-      if (sessions.length === 0) return
-
-      if (matchesBinding(e, 'nav.expandCard', kb)) {
-        if (state.focusedCardIndex !== null && sessions[state.focusedCardIndex]) {
-          e.preventDefault()
-          state.setExpandedSession(sessions[state.focusedCardIndex].id)
-        }
-        return
-      }
-
-      const cols = getGridCols(state.settings.layoutMode)
-      if (matchesBinding(e, 'nav.cardLeft', kb)) {
-        e.preventDefault()
-        moveCardFocus(sessions.length, -1, 0, cols)
-        return
-      }
-      if (matchesBinding(e, 'nav.cardRight', kb)) {
-        e.preventDefault()
-        moveCardFocus(sessions.length, 1, 0, cols)
-        return
-      }
-      if (matchesBinding(e, 'nav.cardUp', kb)) {
-        e.preventDefault()
-        moveCardFocus(sessions.length, 0, -1, cols)
-        return
-      }
-      if (matchesBinding(e, 'nav.cardDown', kb)) {
-        e.preventDefault()
-        moveCardFocus(sessions.length, 0, 1, cols)
-        return
-      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  const hasProjects = projects.length > 0
-  const [showJournal, setShowJournal] = useState(false)
-
   return (
     <div className="flex h-screen bg-bg-base text-text-primary overflow-hidden">
-      {/* Left sidebar */}
       <ProjectSidebar />
-
-      {/* Main content area or terminal mode (sidebar stays visible in both) */}
-      {isTerminalMode ? (
-        <TerminalModeView />
-      ) : (
-        <div className="flex flex-col flex-1 overflow-hidden">
-          {/* Top bar — drag region + actions */}
-          <MainTopBar showJournal={showJournal} onToggleJournal={() => setShowJournal((v) => !v)} />
-
-          {/* Content + optional journal panel */}
-          <div className="flex flex-1 overflow-hidden relative">
-            <div className="flex-1 overflow-hidden relative">
-              {hasProjects ? (
-                <MainContent />
-              ) : (
-                <EmptyState />
-              )}
-            </div>
-            {showJournal && (
-              <JournalPanel onClose={() => setShowJournal(false)} />
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Expanded terminal overlay */}
-      {!isTerminalMode && expandedSessionId && (
-        <FullTerminal sessionId={expandedSessionId} />
-      )}
-
+      <TerminalModeView />
       {sessionNotesEditor && (
         <SessionNotesModal
           projectId={sessionNotesEditor.projectId}
           sessionId={sessionNotesEditor.sessionId}
         />
       )}
-
-      {/* Modals */}
       {showAddSessionModal && <AddSessionModal />}
       {showAddProjectModal && <AddProjectModal />}
       {showConfigPanel && <ConfigPanel />}
-    </div>
-  )
-}
-
-function MainTopBar({ showJournal, onToggleJournal }: { showJournal: boolean; onToggleJournal: () => void }): React.ReactElement {
-  const { projects, activeProjectId, settings, setSettings, getActiveProject, getProjectViewMode, setProjectViewMode, setShowAddSessionModal, getSessionsForActiveProject, addSessionToProject, initSessionState, setTerminalMode, setTerminalModeSession, isTerminalMode } = useAppStore()
-
-  const project = getActiveProject()
-  const viewMode = activeProjectId ? getProjectViewMode(activeProjectId) : 'terminals'
-
-  const handleAddSession = (): void => {
-    if (!project) return
-    const sessions = getSessionsForActiveProject()
-    const lastCwd = sessions.at(-1)?.cwd
-    if (lastCwd) {
-      const name = lastCwd !== '~' ? lastCwd.split('/').filter(Boolean).pop() ?? 'Terminal' : 'Terminal'
-      window.api.addSessionToStore(project.id, { name, cwd: lastCwd }).then((stored) => {
-        addSessionToProject(project.id, { id: stored.id, name, cwd: lastCwd })
-        initSessionState(stored.id, project.id)
-        return window.api.createTerminal({ id: stored.id, name, cwd: lastCwd, projectId: project.id })
-      }).catch((err) => console.error('Failed to create session:', err))
-    } else {
-      setShowAddSessionModal(true)
-    }
-  }
-
-  return (
-    <div
-      className="flex items-center justify-between h-11 border-b border-border-subtle bg-bg-base flex-shrink-0"
-      style={{ WebkitAppRegion: 'drag', paddingLeft: 16, paddingRight: 16 } as React.CSSProperties}
-    >
-      {/* Project name */}
-      <div
-        className="flex items-center gap-2"
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-      >
-        {project ? (
-          <span className="text-sm font-medium text-text-primary">{project.name}</span>
-        ) : (
-          <span className="text-sm text-text-muted">No project selected</span>
-        )}
-        {project && (
-          <div className="flex items-center bg-bg-overlay rounded-md overflow-hidden border border-border-subtle ml-2">
-            <button
-              className={`px-2.5 py-1 text-xs transition-colors ${viewMode === 'terminals' ? 'text-text-primary bg-bg-card' : 'text-text-muted hover:text-text-primary'}`}
-              onClick={() => activeProjectId && setProjectViewMode(activeProjectId, 'terminals')}
-            >
-              Terminals
-            </button>
-            <button
-              className={`px-2.5 py-1 text-xs transition-colors ${viewMode === 'planner' ? 'text-text-primary bg-bg-card' : 'text-text-muted hover:text-text-primary'}`}
-              onClick={() => activeProjectId && setProjectViewMode(activeProjectId, 'planner')}
-            >
-              Planner
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Right actions */}
-      <div
-        className="flex items-center gap-1"
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-      >
-        <LayoutToggle />
-        {project && (
-          <button
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded-md transition-colors"
-            onClick={handleAddSession}
-            title="New terminal (⌘T)"
-          >
-            <span className="text-base leading-none">+</span>
-            <span>Terminal</span>
-          </button>
-        )}
-        <div className="w-px h-4 bg-border-subtle mx-0.5" />
-        <button
-          onClick={onToggleJournal}
-          className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors border ${
-            showJournal
-              ? 'text-accent-green border-accent-green/40 bg-accent-green/5'
-              : 'text-text-muted border-border-subtle/60 hover:text-text-primary hover:bg-bg-overlay'
-          }`}
-          title="Journal"
-        >
-          <span>✦</span>
-          <span>Journal</span>
-        </button>
-        {/* Window mode toggle — hidden when already in terminal mode */}
-        {!isTerminalMode && (
-          <>
-            <div className="w-px h-4 bg-border-subtle mx-0.5" />
-            <button
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md transition-colors border ${
-                settings.windowMode
-                  ? 'text-accent-green border-accent-green/40 hover:border-accent-green/70 bg-accent-green/5'
-                  : 'text-text-muted border-border-subtle/60 hover:text-text-primary hover:bg-bg-overlay'
-              }`}
-              onClick={() => {
-                const next = !settings.windowMode
-                setSettings({ windowMode: next })
-                window.api.setWindowMode(next)
-              }}
-              title={settings.windowMode ? 'Window mode — click to switch to tray mode' : 'Tray mode — click to switch to window mode'}
-            >
-              <span className="text-[12px] leading-none">{settings.windowMode ? '🖥' : '◼'}</span>
-              <span>{settings.windowMode ? 'Window' : 'Tray'}</span>
-            </button>
-          </>
-        )}
-        {/* Terminal Mode button — only shown in window mode */}
-        {settings.windowMode && (
-          <>
-            <div className="w-px h-4 bg-border-subtle mx-0.5" />
-            <button
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded-md transition-colors border border-border-subtle/60"
-              onClick={() => {
-                const sessions = projects.flatMap((p) => p.sessions.filter((s) => !s.parentSessionId))
-                setTerminalModeSession(sessions[0]?.id ?? null)
-                setTerminalMode(true)
-              }}
-              title="Enter terminal mode"
-            >
-              <span className="font-mono text-[11px]">▣</span>
-              <span>Terminal Mode</span>
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function MainContent(): React.ReactElement {
-  const { activeProjectId, getProjectViewMode } = useAppStore()
-  const viewMode = activeProjectId ? getProjectViewMode(activeProjectId) : 'terminals'
-
-  return viewMode === 'planner' ? <PlannerBoard /> : <TerminalGrid />
-}
-
-const LAYOUT_MODES = ['auto', '1', '2', '3'] as const
-const LAYOUT_LABELS: Record<string, string> = { auto: '⊞', '1': '▬', '2': '⊟', '3': '⊠' }
-const LAYOUT_TITLES: Record<string, string> = {
-  auto: 'Auto grid',
-  '1': '1 column',
-  '2': '2 columns',
-  '3': '3 columns'
-}
-
-function LayoutToggle(): React.ReactElement {
-  const { settings, setSettings } = useAppStore()
-  const current = settings.layoutMode || 'auto'
-
-  const cycle = (): void => {
-    const idx = LAYOUT_MODES.indexOf(current as (typeof LAYOUT_MODES)[number])
-    const next = LAYOUT_MODES[(idx + 1) % LAYOUT_MODES.length]
-    setSettings({ layoutMode: next })
-    window.api.setSettings({ layoutMode: next })
-  }
-
-  return (
-    <button
-      className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors font-mono"
-      onClick={cycle}
-      title={`Layout: ${LAYOUT_TITLES[current]} (click to cycle)`}
-    >
-      {LAYOUT_LABELS[current] || '⊞'}
-    </button>
-  )
-}
-
-function EmptyState(): React.ReactElement {
-  const { setShowAddProjectModal } = useAppStore()
-  return (
-    <div className="flex flex-col items-center justify-center h-full gap-4 text-text-muted">
-      <div className="text-5xl opacity-20">⬛</div>
-      <p className="text-sm">No projects yet.</p>
-      <button
-        className="px-4 py-2 bg-accent-green text-bg-base rounded text-sm font-medium hover:opacity-90 transition-opacity"
-        onClick={() => setShowAddProjectModal(true)}
-      >
-        Create your first project
-      </button>
     </div>
   )
 }

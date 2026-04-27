@@ -6,6 +6,7 @@ import { CanvasAddon } from '@xterm/addon-canvas'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useAppStore, SessionConfig, SessionRuntimeState, SessionGroup } from '../store'
 import JournalPanel from './JournalPanel'
+import PlannerBoard from './PlannerBoard'
 import '@xterm/xterm/css/xterm.css'
 
 // ── Group color palette ────────────────────────────────────────────────────────
@@ -787,8 +788,9 @@ export default function TerminalModeView(): React.ReactElement {
     sessionStates,
     settings,
     terminalModeSessionId,
-    setTerminalMode,
     setTerminalModeSession,
+    projectViewMode,
+    setSettings,
     addProject,
     addSessionToProject,
     removeSessionFromProject,
@@ -804,7 +806,11 @@ export default function TerminalModeView(): React.ReactElement {
     setTerminalWindowId,
     newWindowRequest,
     newTabRequest,
+    setPlannerSessionFilter,
+    setProjectViewMode,
   } = useAppStore()
+
+  const viewMode = activeProjectId ? (projectViewMode[activeProjectId] ?? 'terminals') : 'terminals'
 
   // Sessions for the active project only
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? projects[0] ?? null
@@ -1108,11 +1114,25 @@ export default function TerminalModeView(): React.ReactElement {
         {/* Draggable spacer — fills empty space between tabs and exit button */}
         <div className="flex-1 self-stretch" />
 
-        {/* Journal + Exit */}
+        {/* Planner + Journal + Tray */}
         <div
           className="flex items-center gap-1 pb-1.5 flex-shrink-0"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
+          {activeProjectId && (
+            <button
+              onClick={() => setProjectViewMode(activeProjectId, viewMode === 'planner' ? 'terminals' : 'planner')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors border ${
+                viewMode === 'planner'
+                  ? 'text-accent-green border-accent-green/40 bg-accent-green/5'
+                  : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay border-border-subtle'
+              }`}
+              title="Planner (⌘⇧P)"
+            >
+              <span>▣</span>
+              <span>Planner</span>
+            </button>
+          )}
           <button
             onClick={() => setShowJournal((v) => !v)}
             className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors border ${
@@ -1126,18 +1146,30 @@ export default function TerminalModeView(): React.ReactElement {
             <span>Journal</span>
           </button>
           <button
-            onClick={() => setTerminalMode(false)}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-text-muted hover:text-text-primary hover:bg-bg-overlay rounded transition-colors border border-border-subtle"
-            title="Exit terminal mode"
+            onClick={() => {
+              const next = !settings.windowMode
+              setSettings({ windowMode: next })
+              window.api.setWindowMode(next)
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors border ${
+              settings.windowMode
+                ? 'text-accent-green border-accent-green/40 bg-accent-green/5'
+                : 'text-text-muted hover:text-text-primary hover:bg-bg-overlay border-border-subtle'
+            }`}
+            title={settings.windowMode ? 'Window mode — click for tray mode' : 'Tray mode — click for window mode'}
           >
-            <span>⊞</span>
-            <span>Session Manager</span>
+            <span className="text-[12px] leading-none">{settings.windowMode ? '🖥' : '◼'}</span>
+            <span>{settings.windowMode ? 'Window' : 'Tray'}</span>
           </button>
         </div>
       </div>
 
       {/* ── Body ── */}
-      {gridView ? (
+      {viewMode === 'planner' ? (
+        <div className="flex-1 overflow-hidden">
+          <PlannerBoard />
+        </div>
+      ) : gridView ? (
         /* ── Grid view: all sessions tiled ── */
         <div
           className="flex-1 grid gap-1 p-1 overflow-hidden"
@@ -1191,6 +1223,18 @@ export default function TerminalModeView(): React.ReactElement {
                     value={activeSession.name}
                     onChange={handleTitleChange}
                   />
+                  {ownerProject && (
+                    <button
+                      onClick={() => {
+                        setPlannerSessionFilter(ownerProject.id, activeSession.id)
+                        setProjectViewMode(ownerProject.id, 'planner')
+                      }}
+                      className="flex-shrink-0 px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-muted hover:text-accent-green border border-border-subtle hover:border-accent-green/40 rounded transition-colors"
+                      title="Open planner for this terminal"
+                    >
+                      Planner
+                    </button>
+                  )}
                 </div>
                 <div className="mt-1.5">
                   <EditableNotes
@@ -1304,7 +1348,7 @@ export default function TerminalModeView(): React.ReactElement {
           </aside>
         )}
       </div>
-      )} {/* end grid/tab conditional */}
+      )} {/* end body */}
 
       {/* Journal panel — right-side overlay */}
       {showJournal && (

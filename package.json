@@ -59,8 +59,9 @@
     ],
     "npmRebuild": true,
     "mac": {
-      "target": "dmg",
-      "category": "public.app-category.developer-tools"
+      "target": "dir",
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.icns"
     },
     "linux": {
       "target": "AppImage"

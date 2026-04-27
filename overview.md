@@ -1145,3 +1145,32 @@ Added per-session short labels (A1, A2, B1, B2, …) so Claude hooks running ins
 2. **`App.tsx`** — Moved `TerminalModeView` from an absolute overlay to an inline flex sibling of `ProjectSidebar`. Now sidebar is always visible. `isTerminalMode ? <TerminalModeView /> : <div flex-col flex-1>...</div>`. Updated Cmd+N keyboard handler and `onMenuNewWindow` listener: in terminal mode they call `requestAddTab()` instead of `window.api.newWindow()`.
 
 3. **`TerminalModeView.tsx`** — Removed `absolute inset-0 z-20`, changed root to `flex flex-col flex-1`. Reduced tab bar `paddingLeft` from 80→12 (traffic lights are behind sidebar now). Added `activeProjectId` + `addTabRequest` from store. Updated `handleAddTab` to prefer the sidebar-selected project (`projects.find(p => p.id === activeProjectId)`). Added `handleAddTabRef` + `useEffect` to fire `handleAddTab` when `addTabRequest` increments.
+
+---
+
+## Checkpoint — Merge session manager mode + terminal mode into unified view
+
+**Goal:** Eliminate the two-mode toggle (Session Manager ↔ Terminal Mode). Single unified UI.
+
+**What was kept from each mode:**
+- Session manager: project sidebar (always visible), xterm grid view (real live terminals)
+- Terminal mode: draggable tab bar, runners sidebar, journal panel, grid ⊞ toggle
+
+**What was removed:**
+- "Enter Terminal Mode" button in top bar
+- "Exit Terminal Mode → Session Manager" button in tab bar
+- Separate `MainTopBar`, `MainContent`, `EmptyState`, `LayoutToggle` components
+- Session manager's ANSI preview card grid (`TerminalGrid`)
+- `FullTerminal` overlay
+- `appendPreviewLine` output handler in App.tsx
+
+**What was moved:**
+- Tray/Window toggle → tab bar right side (was in MainTopBar)
+- Planner toggle → tab bar right side (was in MainTopBar as Terminals/Planner buttons)
+
+**Files changed:**
+1. `src/renderer/src/App.tsx` — always renders `ProjectSidebar + TerminalModeView`; `loadInitialState` unconditionally calls `setTerminalMode(true)`; keyboard handler simplified
+2. `src/renderer/src/components/TerminalModeView.tsx` — adds `PlannerBoard` import, `projectViewMode`/`setSettings` from store; planner rendering in body; tab bar right shows Planner+Journal+Tray buttons
+3. `src/renderer/src/components/ProjectSidebar.tsx` — removed `isTerminalMode` guard; windows/groups section always shown under active project
+
+**Grid content:** Real xterm panes (not ANSI preview cards) — interactive, 5000-line scrollback.

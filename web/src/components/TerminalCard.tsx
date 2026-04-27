@@ -198,6 +198,12 @@ export default function TerminalCard({ session, projectId, autoLabel }: Terminal
 
   return (
     <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('application/sessionid', session.id)
+        e.dataTransfer.setData('text/plain', `session:${session.id}`)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
       className={`
         bg-bg-card border rounded-lg overflow-hidden
         transition-all duration-150 hover:shadow-lg

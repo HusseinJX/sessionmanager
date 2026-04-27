@@ -3,11 +3,20 @@ import { useAppStore } from './store'
 import { fetchProjects, fetchLogs, sseUrl, fetchTelegramNotifications, setTelegramNotifications } from './api'
 import type { ServerConfig, SessionStatus, TaskItem } from './types'
 import ConnectionSetup from './components/ConnectionSetup'
-import ProjectTabs from './components/ProjectTabs'
+import AppSidebar from './components/AppSidebar'
 import TerminalGrid from './components/TerminalGrid'
 import PlannerBoard from './components/PlannerBoard'
 import ExpandedSession from './components/ExpandedSession'
 import SessionNotesModal from './components/SessionNotesModal'
+
+const LAYOUT_MODES = ['auto', '1', '2', '3'] as const
+const LAYOUT_LABELS: Record<string, string> = { auto: '⊞', '1': '▬', '2': '⊟', '3': '⊠' }
+const LAYOUT_TITLES: Record<string, string> = {
+  auto: 'Auto grid',
+  '1': '1 column',
+  '2': '2 columns',
+  '3': '3 columns',
+}
 
 export default function App() {
   const {
@@ -30,7 +39,14 @@ export default function App() {
     appendOutput,
     setSessionLogs,
     sessionNotesEditor,
+    layoutMode,
+    setLayoutMode,
   } = useAppStore()
+
+  const cycleLayout = () => {
+    const idx = LAYOUT_MODES.indexOf(layoutMode)
+    setLayoutMode(LAYOUT_MODES[(idx + 1) % LAYOUT_MODES.length])
+  }
 
   const viewMode = activeProjectId ? (projectViewMode[activeProjectId] ?? 'terminals') : 'terminals'
 
@@ -202,6 +218,41 @@ export default function App() {
           SessionManager
         </button>
         <div className="flex items-center gap-2">
+          {activeProjectId && (
+            <div className="flex items-center bg-bg-overlay rounded border border-border-subtle overflow-hidden">
+              <button
+                className={`px-2 py-1 text-xs transition-colors ${
+                  viewMode === 'terminals'
+                    ? 'bg-accent-green/15 text-accent-green font-medium'
+                    : 'text-text-muted hover:text-text-primary'
+                }`}
+                onClick={() => setProjectViewMode(activeProjectId, 'terminals')}
+                title="Terminal grid (Cmd+Shift+P)"
+              >
+                Terminals
+              </button>
+              <button
+                className={`px-2 py-1 text-xs transition-colors ${
+                  viewMode === 'planner'
+                    ? 'bg-accent-green/15 text-accent-green font-medium'
+                    : 'text-text-muted hover:text-text-primary'
+                }`}
+                onClick={() => setProjectViewMode(activeProjectId, 'planner')}
+                title="Planner board (Cmd+Shift+P)"
+              >
+                Planner
+              </button>
+            </div>
+          )}
+          {activeProjectId && viewMode === 'terminals' && (
+            <button
+              className="px-2 py-1 text-xs text-text-muted hover:text-text-primary rounded hover:bg-bg-overlay transition-colors font-mono"
+              onClick={cycleLayout}
+              title={`Layout: ${LAYOUT_TITLES[layoutMode]}`}
+            >
+              {LAYOUT_LABELS[layoutMode] || '⊞'}
+            </button>
+          )}
           {connected ? (
             <span className="flex items-center gap-1 text-xs text-accent-green">
               <span className="w-1.5 h-1.5 rounded-full bg-accent-green inline-block" />
@@ -242,12 +293,12 @@ export default function App() {
         </div>
       </div>
 
-      {/* Project tabs */}
-      <ProjectTabs />
-
-      {/* Main content */}
-      <div className="flex-1 overflow-hidden relative">
-        {viewMode === 'planner' ? <PlannerBoard /> : <TerminalGrid />}
+      {/* Body: sidebar + main */}
+      <div className="flex flex-1 overflow-hidden">
+        <AppSidebar />
+        <div className="flex-1 overflow-hidden relative">
+          {viewMode === 'planner' ? <PlannerBoard /> : <TerminalGrid />}
+        </div>
       </div>
 
       {/* Expanded session overlay */}
