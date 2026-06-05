@@ -4,7 +4,10 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, updateSessionName, setSessionQueueRunning } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, updateSessionName, setSessionQueueRunning, updateSessionFields } from './store'
+import type { ProjectConfig } from './store'
+import { getInbox, getItem, updateItem, resetInbox, getJob, addJob, updateJob, removeJob, addTicket, updateTicket, removeTicket, type FeedbackItem } from './triage-store'
+import { createWorktree, finalizeJobPr, cleanupWorktree } from './worktree'
 
 // Compute a short label like "A1", "A2" for a top-level session (runners excluded from count).
 function computeSessionLabel(projectId: string): string {
@@ -156,6 +159,8 @@ export class HttpApiServer {
     if (!next) {
       setSessionQueueRunning(project.id, sessionId, false)
       this.pushSse('queue-stopped', { sessionId, projectId: project.id })
+      // Job drained — if it ran in an isolated worktree, commit + PR + notify.
+      this.finalizeJob(project.id, sessionId)
       return
     }
 
@@ -164,6 +169,85 @@ export class HttpApiServer {
     this.sessionManager.submitCommand(sessionId, cmd)
     const updated = updateTask(project.id, next.id, { status: 'in-progress' })
     if (updated) this.pushSse('task-updated', { projectId: project.id, task: updated })
+  }
+
+  // Post-completion PR hook: when a Job's queue drains, commit the worktree,
+  // push the branch, open a PR, and notify (SSE event + Telegram if wired).
+  // Fire-and-forget — git/gh calls are blocking, so run off the event path.
+  private finalizeJob(projectId: string, sessionId: string): void {
+    const project = getProjects().find((p) => p.id === projectId)
+    const session = project?.sessions.find((s) => s.id === sessionId)
+    if (!session?.worktree) return // not an isolated job; nothing to PR
+
+    const wt = session.worktree
+    const done = getTasksForProject(projectId)
+      .filter((t) => t.assignedSessionId === sessionId && t.status === 'done' && !t.title.startsWith('claude --'))
+    const title = `${session.name}: ${project!.name}`
+    const body =
+      `Automated PR from SessionManager morning triage.\n\n## Tasks completed\n` +
+      (done.length ? done.map((t) => `- ${t.title}`).join('\n') : '- (no tracked tasks)') +
+      `\n\nBranch \`${wt.branch}\` off \`${wt.baseBranch}\`.`
+
+    setImmediate(() => {
+      try {
+        const r = finalizeJobPr(wt, title, body)
+        updateSessionFields(projectId, sessionId, { prUrl: r.prUrl ?? undefined, prNote: r.note })
+        this.pushSse('job-pr', {
+          projectId, sessionId, projectName: project!.name,
+          branch: r.branch, prUrl: r.prUrl, committed: r.committed, pushed: r.pushed, note: r.note,
+        })
+        console.log(`[job-pr] ${project!.name} ${wt.branch}: ${r.note}${r.prUrl ? ' ' + r.prUrl : ''}`)
+        this.sessionManager.emit('job-pr', sessionId, { projectName: project!.name, branch: r.branch, prUrl: r.prUrl, note: r.note })
+        if (r.prUrl) cleanupWorktree(wt)
+      } catch (e) {
+        console.error(`[job-pr] finalize failed for ${project!.name}:`, (e as Error)?.message)
+      }
+    })
+  }
+
+  // Launch one Job: create a session (in a worktree), optionally boot Claude as
+  // task 0, queue the given tasks assigned to it, and press Play. Shared by both
+  // feedback-batch Jobs and self-authored backlog Jobs.
+  private launchJob(
+    project: ProjectConfig,
+    jobName: string,
+    tasks: Array<{ title: string; description: string; command?: string }>,
+    useClaude: boolean
+  ) {
+    const label = computeSessionLabel(project.id)
+    const session = addSession(project.id, { name: jobName, cwd: '~', label })
+    const wt = createWorktree(project.name, getInbox().date, session.id)
+    if (wt) updateSessionFields(project.id, session.id, { cwd: wt.path, worktree: wt })
+
+    let ptyOk = true
+    try {
+      this.sessionManager.createSession({
+        id: session.id, name: session.name, cwd: session.cwd,
+        projectId: project.id, projectName: project.name, label, status: 'running',
+      })
+    } catch (e) {
+      ptyOk = false
+      console.error(`[launchJob] PTY spawn failed for ${project.name}:`, (e as Error)?.message)
+    }
+    this.pushSse('session-created', { projectId: project.id, session })
+
+    const taskIds: string[] = []
+    if (useClaude) {
+      const boot = addTask(project.id, { title: 'claude --dangerously-skip-permissions', description: 'Boot Claude Code for this job (task 0).', status: 'backlog' })
+      updateTask(project.id, boot.id, { assignedSessionId: session.id })
+      taskIds.push(boot.id)
+    }
+    for (const t of tasks) {
+      const task = addTask(project.id, { title: t.title, description: t.description, status: 'backlog' })
+      updateTask(project.id, task.id, { assignedSessionId: session.id, ...(t.command ? { command: t.command } : {}) })
+      taskIds.push(task.id)
+    }
+
+    if (ptyOk) this.startQueue(project.id, session.id)
+    return {
+      projectId: project.id, projectName: project.name, sessionId: session.id, sessionLabel: label,
+      taskIds, ptyOk, playing: ptyOk, worktree: wt ? wt.path : null, branch: wt ? wt.branch : null,
+    }
   }
 
   private startQueue(projectId: string, sessionId: string): void {
@@ -203,10 +287,7 @@ export class HttpApiServer {
 
   private authenticate(req: http.IncomingMessage): boolean {
     const auth = req.headers['authorization']
-    if (auth?.startsWith('Bearer ') && auth.slice(7) === this.token) return true
-    const url = new URL(req.url || '/', `https://localhost:${this.port}`)
-    if (url.searchParams.get('token') === this.token) return true
-    return false
+    return auth?.startsWith('Bearer ') === true && auth.slice(7) === this.token
   }
 
   private getClientIp(req: http.IncomingMessage): string {
@@ -239,10 +320,16 @@ export class HttpApiServer {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
   }
 
+  private static readonly ALLOWED_ORIGINS = new Set([
+    'https://mambomarket.com',
+    'https://www.mambomarket.com',
+    'http://localhost:5173',  // local dev
+    'http://localhost:4173',  // local preview
+  ])
+
   private cors(res: http.ServerResponse, req?: http.IncomingMessage): void {
-    // Restrict CORS to the origin making the request (requires valid auth anyway)
     const origin = req?.headers['origin']
-    if (origin) {
+    if (origin && HttpApiServer.ALLOWED_ORIGINS.has(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin)
       res.setHeader('Vary', 'Origin')
     }
@@ -683,8 +770,329 @@ export class HttpApiServer {
       return
     }
 
+    // ===== Morning Triage =====
+
+    // GET /api/triage/inbox — the consolidated overnight feedback payload
+    if (req.method === 'GET' && urlPath === '/api/triage/inbox') {
+      this.json(res, 200, getInbox(), req)
+      return
+    }
+
+    // POST /api/triage/reset — restore the inbox from seed (re-run the demo)
+    if (req.method === 'POST' && urlPath === '/api/triage/reset') {
+      this.json(res, 200, resetInbox(), req)
+      return
+    }
+
+    // PUT /api/triage/items/:id — patch triage fields (size, status, guidelines, spec)
+    const triageItemMatch = urlPath.match(/^\/api\/triage\/items\/([^/]+)$/)
+    if (req.method === 'PUT' && triageItemMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const updates = JSON.parse(body) as Partial<FeedbackItem>
+          const item = updateItem(triageItemMatch[1], updates)
+          if (!item) return this.json(res, 404, { error: 'Item not found' }, req)
+          this.json(res, 200, item, req)
+        } catch {
+          this.json(res, 400, { error: 'Invalid JSON' }, req)
+        }
+      })
+      return
+    }
+
+    // POST /api/triage/items/:id/plan — open a live Claude planning session in
+    // the item's worktree, seeded with the task as context. Reuses an existing
+    // live session if one is already open for this item.
+    const planStartMatch = urlPath.match(/^\/api\/triage\/items\/([^/]+)\/plan$/)
+    if (req.method === 'POST' && planStartMatch) {
+      try {
+        const id = planStartMatch[1]
+        const item = getItem(id)
+        if (!item) return this.json(res, 404, { error: 'Item not found' }, req)
+
+        // Reuse a live planning session if present.
+        if (item.planningSessionId && this.sessionManager.getSessionMeta(item.planningSessionId)) {
+          const meta = this.sessionManager.getSessionMeta(item.planningSessionId)!
+          return this.json(res, 200, { sessionId: item.planningSessionId, projectId: item.planningProjectId, reused: true, cwd: meta.cwd }, req)
+        }
+
+        const projects = getProjects()
+        let project = projects.find((p) => p.name.toLowerCase() === item.targetProject.toLowerCase())
+        if (!project) project = addProject(item.targetProject)
+
+        const label = computeSessionLabel(project.id)
+        const session = addSession(project.id, { name: `Plan: ${item.title}`.slice(0, 60), cwd: '~', label })
+
+        // Isolate the planning session in a worktree (same as a Job) so the plan
+        // is made against the real code, and execution can reuse it in place.
+        // If worktrees are off/unavailable, use a scratch dir (never the real home).
+        const wt = createWorktree(project.name, getInbox().date, session.id)
+        let cwd: string
+        if (wt) {
+          cwd = wt.path
+        } else {
+          cwd = path.join(os.tmpdir(), 'sm-plan', session.id)
+          fs.mkdirSync(cwd, { recursive: true })
+        }
+        updateSessionFields(project.id, session.id, { cwd, worktree: wt ?? undefined })
+
+        // Drop a CONTEXT.md the seeded Claude reads as its first action.
+        try {
+          fs.writeFileSync(path.join(cwd, 'CONTEXT.md'), this.buildContextMd(item))
+        } catch (e) { console.error('[triage/plan] CONTEXT.md write failed:', (e as Error)?.message) }
+
+        // Seed Claude: read the context, discuss, don't write code yet.
+        const seed = 'Read ./CONTEXT.md — it describes a task to plan. Explore the relevant code, ' +
+          'discuss with me, and help refine a clear implementation plan. Do not write code yet; ' +
+          'when we agree, I will ask you to save the plan to PLAN.md.'
+        const command = `claude --dangerously-skip-permissions "${seed}"`
+
+        let ptyOk = true
+        try {
+          this.sessionManager.createSession({
+            id: session.id, name: session.name, cwd, command,
+            projectId: project.id, projectName: project.name, label, status: 'running',
+          })
+        } catch (e) {
+          ptyOk = false
+          console.error('[triage/plan] PTY spawn failed:', (e as Error)?.message)
+        }
+
+        updateItem(id, { planningSessionId: session.id, planningProjectId: project.id })
+        this.pushSse('session-created', { projectId: project.id, session })
+        return this.json(res, 200, {
+          sessionId: session.id, projectId: project.id, sessionLabel: label,
+          ptyOk, cwd, branch: wt ? wt.branch : null,
+        }, req)
+      } catch (e) {
+        console.error('[triage/plan]', e)
+        return this.json(res, 500, { error: String((e as Error)?.message || e) }, req)
+      }
+    }
+
+    // GET /api/triage/items/:id/plan/file?name=PLAN.md — read a file the planning
+    // session wrote into its worktree (used to pull the locked plan back).
+    const planFileMatch = urlPath.match(/^\/api\/triage\/items\/([^/]+)\/plan\/file$/)
+    if (req.method === 'GET' && planFileMatch) {
+      const item = getItem(planFileMatch[1])
+      if (!item?.planningSessionId) return this.json(res, 404, { error: 'No planning session' }, req)
+      const project = getProjects().find((p) => p.id === item.planningProjectId)
+      const session = project?.sessions.find((s) => s.id === item.planningSessionId)
+      const dir = session?.worktree?.path
+        || (session?.cwd?.startsWith('~') ? path.join(os.homedir(), session.cwd.slice(1)) : session?.cwd)
+        || os.homedir()
+      const name = path.basename(url.searchParams.get('name') || 'PLAN.md')
+      try {
+        const content = fs.readFileSync(path.join(dir, name), 'utf-8')
+        return this.json(res, 200, { name, content }, req)
+      } catch {
+        return this.json(res, 404, { error: `${name} not found yet` }, req)
+      }
+    }
+
+    // ===== Backlog Jobs (self-authored task groups) =====
+
+    // POST /api/triage/jobs — create a job
+    if (req.method === 'POST' && urlPath === '/api/triage/jobs') {
+      this.readBody(req).then((body) => {
+        try {
+          const { name, project } = JSON.parse(body) as { name?: string; project?: string }
+          if (!name || !project) return this.json(res, 400, { error: 'name and project required' }, req)
+          this.json(res, 201, addJob(name, project), req)
+        } catch { this.json(res, 400, { error: 'Invalid JSON' }, req) }
+      })
+      return
+    }
+
+    // PUT/DELETE /api/triage/jobs/:jid
+    const jobMatch = urlPath.match(/^\/api\/triage\/jobs\/([^/]+)$/)
+    if (jobMatch && req.method === 'PUT') {
+      this.readBody(req).then((body) => {
+        try {
+          const job = updateJob(jobMatch[1], JSON.parse(body))
+          if (!job) return this.json(res, 404, { error: 'Job not found' }, req)
+          this.json(res, 200, job, req)
+        } catch { this.json(res, 400, { error: 'Invalid JSON' }, req) }
+      })
+      return
+    }
+    if (jobMatch && req.method === 'DELETE') {
+      removeJob(jobMatch[1])
+      this.json(res, 200, { ok: true }, req)
+      return
+    }
+
+    // POST /api/triage/jobs/:jid/tickets — add a ticket
+    const ticketAddMatch = urlPath.match(/^\/api\/triage\/jobs\/([^/]+)\/tickets$/)
+    if (ticketAddMatch && req.method === 'POST') {
+      this.readBody(req).then((body) => {
+        try {
+          const { title, size } = JSON.parse(body) as { title?: string; size?: string }
+          if (!title) return this.json(res, 400, { error: 'title required' }, req)
+          const t = addTicket(ticketAddMatch[1], title, (size as any) || 'medium')
+          if (!t) return this.json(res, 404, { error: 'Job not found' }, req)
+          this.json(res, 201, t, req)
+        } catch { this.json(res, 400, { error: 'Invalid JSON' }, req) }
+      })
+      return
+    }
+
+    // PUT/DELETE /api/triage/jobs/:jid/tickets/:tid
+    const ticketMatch = urlPath.match(/^\/api\/triage\/jobs\/([^/]+)\/tickets\/([^/]+)$/)
+    if (ticketMatch && req.method === 'PUT') {
+      this.readBody(req).then((body) => {
+        try {
+          const t = updateTicket(ticketMatch[1], ticketMatch[2], JSON.parse(body))
+          if (!t) return this.json(res, 404, { error: 'Ticket not found' }, req)
+          this.json(res, 200, t, req)
+        } catch { this.json(res, 400, { error: 'Invalid JSON' }, req) }
+      })
+      return
+    }
+    if (ticketMatch && req.method === 'DELETE') {
+      removeTicket(ticketMatch[1], ticketMatch[2])
+      this.json(res, 200, { ok: true }, req)
+      return
+    }
+
+    // POST /api/triage/dispatch — build feedback items and/or backlog jobs:
+    // each becomes a Job (session in a worktree) with its tasks queued + played.
+    if (req.method === 'POST' && urlPath === '/api/triage/dispatch') {
+      this.readBody(req).then((body) => {
+        try {
+          const { itemIds = [], jobIds = [], groups: explicitGroups = [], useClaude = true, jobLabel } = JSON.parse(body) as
+            { itemIds?: string[]; jobIds?: string[]; groups?: Array<{ name?: string; project: string; itemIds: string[] }>; useClaude?: boolean; jobLabel?: string }
+
+          const projects = getProjects()
+          const groups = new Map<string, { project: ProjectConfig; items: FeedbackItem[] }>()
+          const skipped: Array<{ id: string; error: string }> = []
+          const jobs: Array<Record<string, unknown>> = []
+
+          // Build a task spec from a feedback item (shared by auto + explicit groups).
+          const feedbackTask = (item: FeedbackItem) => {
+            const size = item.size ?? item.suggestedSize
+            const guidelinesBlock = item.guidelines.trim() ? `\n\n--- Guidelines (from morning planning) ---\n${item.guidelines.trim()}` : ''
+            return {
+              title: `[${size.toUpperCase()}] ${item.title}`,
+              description: `${(item.enrichedSpec || item.body).trim()}${guidelinesBlock}\n\n--- Source ---\n${item.source} · ${item.sourceDetail}${item.votes != null ? ` · ${item.votes} votes` : ''} · severity ${item.signals.severity}`,
+            }
+          }
+          const resolveProject = (name: string) => projects.find((p) => p.name.toLowerCase() === name.toLowerCase()) || addProject(name)
+
+          // --- Feedback items ---
+          for (const id of itemIds) {
+            const item = getItem(id)
+            if (!item) { skipped.push({ id, error: 'not found' }); continue }
+            if (item.triageStatus === 'dispatched') { skipped.push({ id, error: 'already dispatched' }); continue }
+
+            // If planned in a live Claude session, execute in that warm
+            // session/worktree — no new Job, no boot task; plan + run share context.
+            if (item.planningSessionId && item.planningProjectId && this.sessionManager.getSessionMeta(item.planningSessionId)) {
+              const project = projects.find((p) => p.id === item.planningProjectId)
+              if (project) {
+                const session = project.sessions.find((s) => s.id === item.planningSessionId)
+                const size = item.size ?? item.suggestedSize
+                const task = addTask(project.id, { title: `[${size.toUpperCase()}] ${item.title} — execute plan`, description: (item.enrichedSpec || item.body).trim(), status: 'backlog' })
+                updateTask(project.id, task.id, { assignedSessionId: item.planningSessionId, command: 'Implement the plan in PLAN.md now. Make all the necessary code changes in this repo, then stop.' })
+                updateItem(id, { triageStatus: 'dispatched', dispatchedProjectId: project.id, dispatchedTaskId: task.id, dispatchedAt: new Date().toISOString() })
+                this.startQueue(project.id, item.planningSessionId)
+                jobs.push({ projectId: project.id, projectName: project.name, sessionId: item.planningSessionId, sessionLabel: session?.label, taskIds: [task.id], ptyOk: true, playing: true, worktree: session?.worktree?.path ?? null, branch: session?.worktree?.branch ?? null, reusedPlanning: true })
+                continue
+              }
+            }
+
+            // Otherwise batch by project: one feedback Job per project.
+            let project = projects.find((p) => p.name.toLowerCase() === item.targetProject.toLowerCase())
+            if (!project) project = addProject(item.targetProject)
+            if (!groups.has(project.id)) groups.set(project.id, { project, items: [] })
+            groups.get(project.id)!.items.push(item)
+          }
+
+          const jobName = jobLabel || `Triage ${getInbox().date}`
+          for (const { project, items } of groups.values()) {
+            const r = this.launchJob(project, jobName, items.map(feedbackTask), useClaude)
+            items.forEach((item, i) => updateItem(item.id, { triageStatus: 'dispatched', dispatchedProjectId: project.id, dispatchedTaskId: r.taskIds[useClaude ? i + 1 : i], dispatchedAt: new Date().toISOString() }))
+            jobs.push(r)
+          }
+
+          // --- Explicit feedback groups (one worktree/Job per staging card) ---
+          for (const g of explicitGroups) {
+            const items = g.itemIds.map((id) => getItem(id)).filter((it): it is FeedbackItem => !!it && it.triageStatus !== 'dispatched')
+            if (!items.length) continue
+            const project = resolveProject(g.project)
+            const r = this.launchJob(project, g.name || jobName, items.map(feedbackTask), useClaude)
+            items.forEach((item, i) => updateItem(item.id, { triageStatus: 'dispatched', dispatchedProjectId: project.id, dispatchedTaskId: r.taskIds[useClaude ? i + 1 : i], dispatchedAt: new Date().toISOString() }))
+            jobs.push(r)
+          }
+
+          // --- Self-authored backlog Jobs ---
+          for (const jid of jobIds) {
+            const bj = getJob(jid)
+            if (!bj) { skipped.push({ id: jid, error: 'job not found' }); continue }
+            if (bj.status === 'dispatched') { skipped.push({ id: jid, error: 'already dispatched' }); continue }
+            if (!bj.tickets.length) { skipped.push({ id: jid, error: 'no tickets' }); continue }
+            let project = projects.find((p) => p.name.toLowerCase() === bj.project.toLowerCase())
+            if (!project) project = addProject(bj.project)
+            const tasks = bj.tickets.map((t) => ({ title: `[${t.size.toUpperCase()}] ${t.title}`, description: `From backlog job "${bj.name}".` }))
+            const r = this.launchJob(project, bj.name, tasks, useClaude)
+            updateJob(jid, { status: 'dispatched', dispatchedProjectId: project.id, dispatchedSessionId: r.sessionId, dispatchedAt: new Date().toISOString() })
+            jobs.push({ ...r, backlogJobId: jid })
+          }
+
+          const dispatched = jobs.reduce((n, j) => n + (j.taskIds as string[]).length, 0)
+          this.json(res, 200, { dispatched, jobs, skipped }, req)
+        } catch (err) {
+          console.error('[triage/dispatch]', err)
+          this.json(res, 500, { error: String((err as Error)?.message || err) }, req)
+        }
+      })
+      return
+    }
+
+    // GET /triage — serve the standalone Morning Triage UI
+    if (req.method === 'GET' && (urlPath === '/triage' || urlPath === '/triage/')) {
+      this.serveTriageUi(res)
+      return
+    }
+
     // Serve web UI static files
     this.serveStatic(urlPath, res)
+  }
+
+  private buildContextMd(item: FeedbackItem): string {
+    const size = item.size ?? item.suggestedSize
+    return [
+      `# Task to plan: ${item.title}`,
+      ``,
+      `- **Target project:** ${item.targetProject}`,
+      `- **Type:** ${item.type} · **Size:** ${size} · **Severity:** ${item.signals.severity}`,
+      `- **Source:** ${item.source} · ${item.sourceDetail}${item.votes != null ? ` · ${item.votes} votes` : ''}`,
+      ``,
+      `## Description`,
+      item.body,
+      ...(item.guidelines.trim() ? [``, `## My guidelines / constraints`, item.guidelines.trim()] : []),
+      ``,
+      `## Your job`,
+      `Help me arrive at a clear, buildable implementation plan. Explore the code first, ask questions, and propose an approach. Save the final plan to PLAN.md only when I ask.`,
+      ``,
+    ].join('\n')
+  }
+
+  private serveTriageUi(res: http.ServerResponse): void {
+    const candidates = [
+      path.join(__dirname, '../../triage/index.html'),
+      path.join(__dirname, '../triage/index.html'),
+      path.join(process.cwd(), 'triage/index.html'),
+      path.join(process.cwd(), '../triage/index.html'),
+    ]
+    for (const f of candidates) {
+      if (fs.existsSync(f)) {
+        res.writeHead(200, { 'Content-Type': 'text/html' })
+        res.end(fs.readFileSync(f))
+        return
+      }
+    }
+    this.json(res, 404, { error: 'Triage UI not found' })
   }
 
   private handleSse(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -694,7 +1102,7 @@ export class HttpApiServer {
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     }
-    if (origin) {
+    if (origin && HttpApiServer.ALLOWED_ORIGINS.has(origin)) {
       headers['Access-Control-Allow-Origin'] = origin
       headers['Vary'] = 'Origin'
     }

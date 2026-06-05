@@ -33,7 +33,6 @@ const token = process.env.SM_TOKEN || getServerToken()
 
 console.log('=== Session Manager Server (HTTPS) ===')
 console.log(`Port:  ${port}`)
-console.log(`Token: ${token}`)
 console.log('')
 
 const sessionManager = new SessionManager()

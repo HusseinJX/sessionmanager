@@ -17,6 +17,13 @@ export interface TaskItem {
   completedAt?: number
 }
 
+export interface WorktreeMeta {
+  repoPath: string
+  branch: string
+  path: string
+  baseBranch: string
+}
+
 export interface SessionConfig {
   id: string
   name: string
@@ -26,6 +33,10 @@ export interface SessionConfig {
   notes?: string
   queueRunning?: boolean
   label?: string
+  // Set when a session is a triage Job running in an isolated git worktree.
+  worktree?: WorktreeMeta
+  prUrl?: string
+  prNote?: string
 }
 
 export interface ProjectConfig {
@@ -222,6 +233,19 @@ export function updateTask(
   Object.assign(task, updates)
   save()
   return task
+}
+
+export function updateSessionFields(
+  projectId: string,
+  sessionId: string,
+  updates: Partial<Pick<SessionConfig, 'worktree' | 'prUrl' | 'prNote' | 'cwd'>>
+): SessionConfig | null {
+  const project = store().projects.find((p) => p.id === projectId)
+  const session = project?.sessions.find((s) => s.id === sessionId)
+  if (!session) return null
+  Object.assign(session, updates)
+  save()
+  return session
 }
 
 export function setSessionQueueRunning(projectId: string, sessionId: string, running: boolean): void {

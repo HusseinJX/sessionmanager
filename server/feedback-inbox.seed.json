@@ -1,0 +1,436 @@
+{
+  "date": "2026-06-05",
+  "generatedAt": "2026-06-05T07:02:00.000Z",
+  "note": "Consolidated overnight payload. All feedback sources (feedbase, atom-issues, slack_watcher, ideaboard, deployed-app telemetry) plus John's personal backlog, merged + deduped by the aggregator. conductor has pre-routed each item to a target project. Sizes are heuristic suggestions awaiting human triage.",
+  "items": [
+    {
+      "id": "fb-001",
+      "source": "slack",
+      "sourceDetail": "#flair-turbohome",
+      "type": "bug",
+      "title": "Checkout fails with Stripe Connect when vendor has no payout account",
+      "body": "Multiple TurboHome vendors report that customers hit a 400 at the final checkout step. Traced to Stripe Connect rejecting the transfer because the vendor never completed payout onboarding. Need a pre-check that blocks checkout (or routes funds to platform balance) when the connected account isn't charges_enabled.",
+      "targetProject": "community-marketplace",
+      "reporter": "TurboHome ops (via slack_watcher)",
+      "account": "TurboHome",
+      "channel": "Slack",
+      "votes": null,
+      "createdAt": "2026-06-04T21:14:00.000Z",
+      "signals": {
+        "frequency": 4,
+        "severity": "high"
+      },
+      "suggestedSize": "medium",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-002",
+      "source": "feedbase",
+      "sourceDetail": "feedbase \u00b7 TanzaniaTourscape",
+      "type": "feature",
+      "title": "Show multi-currency pricing (USD / TZS) on booking pages",
+      "body": "Top-voted request this week. International travelers want to see prices in both USD and Tanzanian Shilling, with a toggle that persists. Exchange rate can be fetched daily.",
+      "targetProject": "TanzaniaTourscape",
+      "reporter": "feedbase board",
+      "account": "Tanzania Tours",
+      "channel": "Meetings",
+      "votes": 27,
+      "createdAt": "2026-06-03T11:40:00.000Z",
+      "signals": {
+        "frequency": 27,
+        "severity": "medium"
+      },
+      "suggestedSize": "medium",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-003",
+      "source": "personal-backlog",
+      "sourceDetail": "John's backlog",
+      "type": "chore",
+      "title": "Purge legacy 'todo' status references from docs + comments",
+      "body": "We standardized on backlog | in-progress | done. Sweep the repo docs and stray comments that still mention 'todo' so nobody reintroduces the broken status.",
+      "targetProject": "sessionmanager",
+      "reporter": "John",
+      "account": "Internal",
+      "channel": "Backlog",
+      "votes": null,
+      "createdAt": "2026-06-05T06:50:00.000Z",
+      "signals": {
+        "frequency": 1,
+        "severity": "low"
+      },
+      "suggestedSize": "small",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-004",
+      "source": "ideaboard",
+      "sourceDetail": "IdeaBoard \u00b7 community vote",
+      "type": "idea",
+      "title": "Group-booking cost splitter for safari trips",
+      "body": "Community's #1 voted idea. When a group books a curated wander, let them split the cost: each member pays their share via their own card, organizer sees who's paid. Needs payment-intent-per-member, a shared booking object, and reminder nudges.",
+      "targetProject": "curated-wander",
+      "reporter": "IdeaBoard (votes loop back via conductor)",
+      "account": "Community",
+      "channel": "IdeaBoard",
+      "votes": 53,
+      "createdAt": "2026-06-02T09:05:00.000Z",
+      "signals": {
+        "frequency": 53,
+        "severity": "medium"
+      },
+      "suggestedSize": "large",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": false,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-005",
+      "source": "slack",
+      "sourceDetail": "#flair-revive",
+      "type": "bug",
+      "title": "DPO payment callback returns 500 intermittently",
+      "body": "Zahab Energy checkout: ~1 in 6 DPO callbacks 500s and the order is left in 'pending'. Suspect a race between the callback writing to SQLite and the order-status poller. Customers think payment failed and retry.",
+      "targetProject": "ZahabEnergy",
+      "reporter": "Zahab support (via slack_watcher)",
+      "account": "Revive",
+      "channel": "Slack",
+      "votes": null,
+      "createdAt": "2026-06-04T18:22:00.000Z",
+      "signals": {
+        "frequency": 6,
+        "severity": "high"
+      },
+      "suggestedSize": "medium",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-006",
+      "source": "feedbase",
+      "sourceDetail": "feedbase \u00b7 NextGenCRM",
+      "type": "feature",
+      "title": "Bulk-tag contacts from the list view",
+      "body": "Sales users want to multi-select rows and apply a tag in one action instead of opening each contact. Add a checkbox column, a selection toolbar, and a tag picker.",
+      "targetProject": "nextgencrm",
+      "reporter": "feedbase board",
+      "account": "NextGen Pilot",
+      "channel": "Email",
+      "votes": 14,
+      "createdAt": "2026-06-03T15:10:00.000Z",
+      "signals": {
+        "frequency": 14,
+        "severity": "medium"
+      },
+      "suggestedSize": "medium",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-007",
+      "source": "personal-backlog",
+      "sourceDetail": "John's backlog",
+      "type": "feature",
+      "title": "Wire community-connector-agent verification into vendor claim flow",
+      "body": "When a vendor claims their listing on community-marketplace, route them through community-connector-agent's chat/SMS profiling before approval. This crosses two codebases and a webhook contract \u2014 needs design before anyone builds it.",
+      "targetProject": "community-marketplace",
+      "reporter": "John",
+      "account": "Internal",
+      "channel": "Backlog",
+      "votes": null,
+      "createdAt": "2026-06-05T06:55:00.000Z",
+      "signals": {
+        "frequency": 1,
+        "severity": "medium"
+      },
+      "suggestedSize": "large",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": false,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-008",
+      "source": "feedbase",
+      "sourceDetail": "feedbase \u00b7 ProLocalIQ",
+      "type": "bug",
+      "title": "Map pins overlap and become unclickable at high zoom",
+      "body": "On dense areas, business pins stack and you can't tap the one underneath. Add clustering or a small collision offset.",
+      "targetProject": "prolocaliq",
+      "reporter": "feedbase board",
+      "account": "Public",
+      "channel": "Feedbase",
+      "votes": 9,
+      "createdAt": "2026-06-02T20:00:00.000Z",
+      "signals": {
+        "frequency": 9,
+        "severity": "medium"
+      },
+      "suggestedSize": "small",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-009",
+      "source": "slack",
+      "sourceDetail": "#flair-general",
+      "type": "feedback",
+      "title": "Typo on Zahab landing hero: 'discvover' \u2192 'discover'",
+      "body": "Spotted on zahabenergy.com hero section. One-character fix.",
+      "targetProject": "ZahabEnergy",
+      "reporter": "Flair team (via slack_watcher)",
+      "account": "Flair",
+      "channel": "Slack",
+      "votes": null,
+      "createdAt": "2026-06-04T13:01:00.000Z",
+      "signals": {
+        "frequency": 1,
+        "severity": "low"
+      },
+      "suggestedSize": "small",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-010",
+      "source": "personal-backlog",
+      "sourceDetail": "John's backlog",
+      "type": "feature",
+      "title": "Git worktree isolation per task so parallel builds don't clash",
+      "body": "The big one. Before spawning the PTY for a task, sessionmanager should create a dedicated git worktree + branch (feature/task-{id}) so concurrent Claude Code runs never stomp each other's files. On task done: commit, push, open a PR, notify me. Needs a real design pass.",
+      "targetProject": "sessionmanager",
+      "reporter": "John",
+      "account": "Internal",
+      "channel": "Backlog",
+      "votes": null,
+      "createdAt": "2026-06-05T06:58:00.000Z",
+      "signals": {
+        "frequency": 1,
+        "severity": "high"
+      },
+      "suggestedSize": "large",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": false,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-011",
+      "source": "feedbase",
+      "sourceDetail": "feedbase \u00b7 TanzaniaTourscape",
+      "type": "bug",
+      "title": "Date picker allows selecting past dates for bookings",
+      "body": "You can pick yesterday as a tour date and it goes through. Clamp the min date to today.",
+      "targetProject": "TanzaniaTourscape",
+      "reporter": "feedbase board",
+      "account": "Safari Co",
+      "channel": "Email",
+      "votes": 18,
+      "createdAt": "2026-06-03T08:30:00.000Z",
+      "signals": {
+        "frequency": 18,
+        "severity": "medium"
+      },
+      "suggestedSize": "small",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-012",
+      "source": "ideaboard",
+      "sourceDetail": "IdeaBoard \u00b7 community vote",
+      "type": "idea",
+      "title": "Auto-tag meeting action items by project",
+      "body": "localvoice extracts action items but they land unsorted. Use the brain profile to tag each item with the most likely target project so they pre-route in the pipeline.",
+      "targetProject": "localvoice",
+      "reporter": "IdeaBoard",
+      "account": "Community",
+      "channel": "IdeaBoard",
+      "votes": 31,
+      "createdAt": "2026-06-01T17:45:00.000Z",
+      "signals": {
+        "frequency": 31,
+        "severity": "medium"
+      },
+      "suggestedSize": "medium",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-013",
+      "source": "slack",
+      "sourceDetail": "#flair-turbohome",
+      "type": "feature",
+      "title": "Show Uber Direct delivery ETA at checkout",
+      "body": "Customers don't see when their order will arrive until after paying. Surface the Uber Direct quote ETA on the checkout summary before payment.",
+      "targetProject": "community-marketplace",
+      "reporter": "TurboHome ops (via slack_watcher)",
+      "account": "TurboHome",
+      "channel": "Slack",
+      "votes": null,
+      "createdAt": "2026-06-04T19:50:00.000Z",
+      "signals": {
+        "frequency": 3,
+        "severity": "medium"
+      },
+      "suggestedSize": "medium",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-014",
+      "source": "personal-backlog",
+      "sourceDetail": "John's backlog",
+      "type": "chore",
+      "title": "Add S/M/L size badge to Atom Issues ticket cards",
+      "body": "Mirror the triage size classification on the atom-issues ticket cards so the dispatcher view shows effort at a glance.",
+      "targetProject": "atom-issues",
+      "reporter": "John",
+      "account": "Internal",
+      "channel": "Backlog",
+      "votes": null,
+      "createdAt": "2026-06-05T06:59:00.000Z",
+      "signals": {
+        "frequency": 1,
+        "severity": "low"
+      },
+      "suggestedSize": "small",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": true,
+      "guidelines": "",
+      "enrichedSpec": ""
+    },
+    {
+      "id": "fb-015",
+      "source": "feedbase",
+      "sourceDetail": "feedbase \u00b7 City-Gears",
+      "type": "idea",
+      "title": "Leave voice notes near vendors in the 3D world",
+      "body": "Closes the capture loop: let users drop a positional voice note next to a vendor in City-Gears. Notes get picked up by localvoice, transcribed, and fed into the idea pipeline. Needs spatial audio anchors, a capture UI, and a localvoice export hook.",
+      "targetProject": "City-Gears",
+      "reporter": "feedbase board",
+      "account": "Public",
+      "channel": "Feedbase",
+      "votes": 22,
+      "createdAt": "2026-06-01T12:00:00.000Z",
+      "signals": {
+        "frequency": 22,
+        "severity": "medium"
+      },
+      "suggestedSize": "large",
+      "size": null,
+      "triageStatus": "pending",
+      "autoQueue": false,
+      "guidelines": "",
+      "enrichedSpec": ""
+    }
+  ],
+  "jobs": [
+    {
+      "id": "job-cm-vendor",
+      "name": "Vendor dashboard v2",
+      "project": "community-marketplace",
+      "status": "backlog",
+      "createdAt": 1780638000000,
+      "tickets": [
+        {
+          "id": "jt-1",
+          "title": "Sales analytics chart on the vendor home",
+          "size": "medium"
+        },
+        {
+          "id": "jt-2",
+          "title": "Export orders to CSV",
+          "size": "small"
+        },
+        {
+          "id": "jt-3",
+          "title": "Bulk-message all of a vendor's customers",
+          "size": "large"
+        }
+      ]
+    },
+    {
+      "id": "job-tz-polish",
+      "name": "Tour detail page polish",
+      "project": "TanzaniaTourscape",
+      "status": "backlog",
+      "createdAt": 1780638000000,
+      "tickets": [
+        {
+          "id": "jt-4",
+          "title": "Sticky booking bar on scroll",
+          "size": "small"
+        },
+        {
+          "id": "jt-5",
+          "title": "Photo gallery lightbox",
+          "size": "medium"
+        },
+        {
+          "id": "jt-6",
+          "title": "Reviews + ratings section",
+          "size": "medium"
+        }
+      ]
+    },
+    {
+      "id": "job-crm-speed",
+      "name": "CRM speedups",
+      "project": "nextgencrm",
+      "status": "backlog",
+      "createdAt": 1780638000000,
+      "tickets": [
+        {
+          "id": "jt-7",
+          "title": "Keyboard shortcuts for the pipeline board",
+          "size": "medium"
+        },
+        {
+          "id": "jt-8",
+          "title": "Inline-edit contact fields from the list",
+          "size": "small"
+        }
+      ]
+    }
+  ]
+}

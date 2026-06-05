@@ -1,6 +1,48 @@
 # Changelog
 
+All notable changes to SessionManager are recorded here. Newest first.
+
 ## Unreleased
+
+### Morning Triage (standalone server + `triage/` UI)
+
+The human-in-the-loop front door for the autonomous build loop: the day's
+aggregated feedback gets classified, planned, and dispatched into SessionManager
+as runnable Jobs — each isolated in its own git worktree, opening a PR when done.
+
+- **"Good Morning John" UI** (`triage/index.html`) — light-mode command center
+  served at `GET /triage`. Two input streams: **left** = feedback from sources
+  grouped into categories (filter by **account** = customer, **channel** = source
+  medium); **right** = self-authored **Backlog Jobs**. Below both, a
+  **ready-to-build staging area** stages refined work as cards, one per parallel
+  worktree — backlog jobs each their own, feedback sharing one workspace per
+  project with any ticket **splittable** into its own. One Build sends them all.
+- **Live planning sessions** — for complex items, "Plan with me" opens a real
+  Claude session in the item's worktree (seeded with a `CONTEXT.md`) and embeds an
+  xterm terminal to chat with it. `POST /api/triage/items/:id/plan` (spawn + seed),
+  `GET …/plan/file` (pull `PLAN.md` into the refined spec). On approve, dispatch
+  reuses that warm session/worktree so plan + execution share one context.
+- **Consolidated feedback payload** (`server/feedback-inbox.seed.json`) — sample
+  overnight batch (feedbase + atom-issues + slack + ideaboard + personal backlog),
+  pre-routed by conductor, with self-authored sample jobs.
+- **Triage store + classifier** (`server/src/triage-store.ts`) — inbox + jobs
+  load/CRUD with a dependency-free size classifier (stand-in for selfimproving).
+- **Endpoints** — `GET /api/triage/inbox`, `PUT /api/triage/items/:id`,
+  `POST /api/triage/items/:id/plan`, `GET …/plan/file`, jobs CRUD
+  (`/api/triage/jobs` + `…/tickets`), `POST /api/triage/dispatch` (`{ itemIds,
+  groups, jobIds }`), `POST /api/triage/reset`.
+- **Jobs-model dispatch** (`launchJob`) — each feedback group / backlog job / split
+  card becomes one Job (session in a worktree): `claude
+  --dangerously-skip-permissions` task 0, tickets as tasks, Play. Resilient when
+  the PTY can't spawn.
+- **Git worktree isolation per Job** (`server/src/worktree.ts`) — branch
+  `triage/<date>/<project>-<sess8>`; repo resolved via `SM_REPOS_DIR` then `~/dev`,
+  `~/Desktop/dev`, `~`. Kill switch `SM_WORKTREES=off`; dest `SM_WORKTREES_DIR`.
+- **Post-done PR hook** — on queue drain: commit → push → `gh pr create` (each
+  step degrades gracefully), `job-pr` SSE event + Telegram notify, worktree pruned.
+- **Server**: `SessionConfig` gained `worktree`/`prUrl`/`prNote`; `TriageInbox`
+  gained `jobs`; `FeedbackItem` gained `account`/`channel`. Bundled server tweaks:
+  Bearer-only auth, CORS allowlist, token no longer logged at startup.
 
 ### Added — Electron app (`src/renderer/src/`)
 

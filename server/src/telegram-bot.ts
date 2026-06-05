@@ -204,6 +204,16 @@ export class TelegramBridge {
       this.notifyInputWaiting(sessionId)
     })
 
+    // Notify when a triage Job finishes and its PR is handled.
+    this.sessionManager.on('job-pr', (_sessionId: string, info: { projectName: string; branch: string; prUrl: string | null; note: string }) => {
+      if (!this.bot) return
+      const head = info.prUrl
+        ? `✅ *${escapeMarkdown(info.projectName)}* job done — PR opened`
+        : `✅ *${escapeMarkdown(info.projectName)}* job done`
+      const lines = [head, `Branch: \`${info.branch}\``, info.prUrl ? info.prUrl : `_${escapeMarkdown(info.note)}_`]
+      this.bot.sendMessage(this.chatId, lines.join('\n'), { parse_mode: 'Markdown' }).catch(() => {})
+    })
+
     console.log('Telegram bot started')
   }
 

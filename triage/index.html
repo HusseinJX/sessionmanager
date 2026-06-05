@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Good Morning, John · SessionManager Triage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Architects+Daughter&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --paper: #fdfdfb; --soft: #f5f5f1;
+    --ink: #1b1b1b; --line: #232323; --muted: #6b7280; --faint: #9aa0aa;
+    --red: #e0392f; --blue: #2563eb;
+    --small: #15803d; --medium: #c2730a; --large: #dc2626;
+    --hand: 'Architects Daughter', cursive;
+    --marker: 'Permanent Marker', cursive;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif; padding-bottom: 60px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 22px 24px; }
+
+  /* Header */
+  h1.greet { font-family: var(--marker); font-weight: 400; font-size: 46px; letter-spacing: 1px; margin: 6px 0 2px; }
+  .date { color: var(--muted); font-size: 14px; }
+  .projbar { display: flex; align-items: center; gap: 8px; margin: 14px 0 10px; flex-wrap: wrap; }
+  .projbar .lead { font-family: var(--hand); font-size: 15px; color: var(--faint); margin-right: 4px; }
+  .ptab { font-family: var(--hand); font-size: 15px; border: 1.5px solid var(--line); background: var(--paper);
+    padding: 4px 14px; border-radius: 14px 12px 13px 11px; cursor: pointer; }
+  .ptab.on { background: var(--ink); color: #fff; }
+  .rule { border: 0; border-top: 2px solid var(--line); margin: 6px 0 20px; }
+
+  /* Token bar */
+  .tokenbar { display: none; background: #fff4f3; border: 1.5px solid #f0b4af; color: #8a2018; padding: 10px 14px;
+    border-radius: 10px; margin: 12px 0; align-items: center; gap: 10px; }
+  .tokenbar.show { display: flex; }
+  .tokenbar input { flex: 1; border: 1px solid #e0b0ab; padding: 7px 10px; border-radius: 8px; }
+
+  /* two-column */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
+  .panel-title { font-family: var(--hand); font-size: 20px; margin: 0 0 2px; }
+  .panel-sub { font-family: var(--hand); font-size: 14px; color: var(--muted); margin-bottom: 12px; }
+
+  /* sketch-style outlined box */
+  .box { border: 2px solid var(--line); border-radius: 16px 14px 17px 13px; background: var(--paper); padding: 16px; }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .filt { font-family: var(--hand); font-size: 13px; border: 1.5px solid var(--line); background: #fff;
+    border-radius: 10px 9px 11px 8px; padding: 4px 8px; }
+  .filt select { font: inherit; border: 0; background: transparent; outline: none; cursor: pointer; }
+
+  /* feedback categories */
+  .cat { margin-bottom: 16px; }
+  .cat-head { display: flex; align-items: baseline; gap: 10px; }
+  .cat-name { font-family: var(--hand); font-size: 17px; text-transform: uppercase; letter-spacing: .5px; }
+  .refine { font-family: var(--hand); font-size: 14px; color: var(--red); cursor: pointer; text-transform: uppercase; letter-spacing: .5px; }
+  .refine:hover { text-decoration: underline; }
+  .fb-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px dashed #e4e4de; }
+  .fb-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .fb-title { cursor: pointer; }
+  .fb-title:hover { color: var(--blue); }
+  .fb-src { font-family: var(--hand); font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .sizepick { display: inline-flex; border: 1.5px solid var(--line); border-radius: 7px; overflow: hidden; flex-shrink: 0; }
+  .sizepick button { font-family: ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 700; border: 0; border-right: 1px solid var(--line);
+    background: #fff; color: var(--muted); width: 22px; text-align: center; padding: 3px 0; cursor: pointer; }
+  .sizepick button:last-child { border-right: 0; }
+  .sizepick button.on.small { background: var(--small); color: #fff; }
+  .sizepick button.on.medium { background: var(--medium); color: #fff; }
+  .sizepick button.on.large { background: var(--large); color: #fff; }
+  .refine-all { text-align: right; margin-top: 6px; }
+
+  /* backlog jobs */
+  .jobs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .job { border: 2px solid var(--line); border-radius: 15px 13px 16px 12px; background: var(--paper); padding: 12px 14px; }
+  .job-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .job-name { font-family: var(--hand); font-size: 16px; text-transform: uppercase; }
+  .job-count { font-family: var(--hand); font-size: 12px; color: var(--faint); }
+  .ticket { font-family: var(--hand); font-size: 14px; padding: 2px 0; color: var(--ink); display: flex; gap: 6px; }
+  .ticket .tk-size { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 5px; color: #fff; align-self: center; }
+  .tk-size.small { background: var(--small);} .tk-size.medium { background: var(--medium);} .tk-size.large { background: var(--large);}
+  .job-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+  .empty-hand { font-family: var(--hand); color: var(--faint); padding: 8px 2px; }
+  .job-name-input { font-family: var(--hand); font-size: 16px; text-transform: uppercase; border: 0; border-bottom: 1.5px dashed transparent; background: transparent; width: 100%; outline: none; }
+  .job-name-input:focus { border-bottom-color: var(--line); }
+  .job-proj { font-family: var(--hand); font-size: 12px; color: var(--blue); border: 0; background: transparent; outline: none; cursor: pointer; }
+  .ticket { align-items: center; }
+  .ticket .tk-title { flex: 1; font-family: var(--hand); font-size: 14px; border: 0; border-bottom: 1px dashed transparent; background: transparent; outline: none; }
+  .ticket .tk-title:focus { border-bottom-color: #cfcfca; }
+  .ticket .tk-size { cursor: pointer; border: 0; font-family: ui-monospace, Menlo, monospace; font-size: 10px; }
+  .tk-del, .job-del { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: 13px; padding: 0 2px; }
+  .tk-del:hover, .job-del:hover { color: var(--red); }
+  .add-ticket { display: flex; gap: 6px; margin-top: 8px; }
+  .add-ticket input { flex: 1; font-family: var(--hand); font-size: 13px; border: 1.5px solid #d9d9d3; border-radius: 8px; padding: 4px 8px; outline: none; }
+  .job.dispatched { opacity: .55; }
+
+  /* staging — ready to build */
+  .stage { margin-top: 34px; border-top: 2px solid var(--line); padding-top: 18px; }
+  .classline { font-family: var(--hand); font-size: 14px; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+  .classline b { color: var(--ink); }
+  .stage-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .scard { border: 2px solid var(--line); border-radius: 15px 13px 16px 12px; background: var(--paper); padding: 12px 14px; position: relative; }
+  .scard.kind-feedback { border-style: dashed; }
+  .scard.excluded { opacity: .4; }
+  .scard-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .scard-name { font-family: var(--hand); font-size: 15px; }
+  .wt-tag { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: #fff; background: var(--ink); border-radius: 5px; padding: 1px 6px; }
+  .scard-proj { font-family: var(--hand); font-size: 12px; color: var(--blue); margin-bottom: 6px; }
+  .scard .ticket { padding: 3px 0; }
+  .split-btn { font-family: var(--hand); font-size: 11px; color: var(--red); cursor: pointer; white-space: nowrap; }
+  .split-btn:hover { text-decoration: underline; }
+  .scard-x { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: 13px; }
+  .scard-x:hover { color: var(--red); }
+  .progress-box { font-family: var(--hand); font-size: 13px; color: var(--muted); margin-top: 14px; }
+  .progress-box b { color: var(--ink); }
+
+  .btn { font-family: var(--hand); font-size: 16px; border: 2px solid var(--line); background: var(--ink); color: #fff;
+    padding: 8px 22px; border-radius: 13px 11px 14px 10px; cursor: pointer; }
+  .btn:hover { background: #000; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.light { background: #fff; color: var(--ink); }
+  .gobar { display: flex; align-items: center; gap: 16px; margin-top: 18px; }
+  .gohint { font-family: var(--hand); color: var(--muted); font-size: 14px; }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(20,20,20,.45); display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+  .modal-bg.show { display: flex; }
+  .modal { background: #fff; border: 2px solid var(--line); border-radius: 16px; width: 100%; max-width: 900px; max-height: 92vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+  .modal-head { padding: 16px 22px; border-bottom: 1.5px solid var(--line); position: sticky; top: 0; background: #fff; }
+  .modal-head h2 { margin: 0; font-family: var(--hand); font-size: 22px; }
+  .modal-head .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .modal-body { padding: 18px 22px; }
+  .modal-foot { padding: 14px 22px; border-top: 1.5px solid var(--line); display: flex; justify-content: space-between; gap: 12px; position: sticky; bottom: 0; background: #fff; }
+  .ctx { background: var(--soft); border: 1px solid #e4e4de; border-radius: 10px; padding: 12px 14px; color: #444; font-size: 13px; margin-bottom: 16px; }
+  .field-label { font-family: var(--hand); font-size: 14px; color: var(--muted); }
+  textarea { width: 100%; border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; resize: vertical; background: #fff; }
+  .plan-warn { background: #fff7e6; border: 1px solid #e8c879; color: #8a5a00; padding: 8px 12px; border-radius: 8px; font-size: 12.5px; margin-bottom: 8px; }
+  .plan-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .plan-note { font-size: 12px; color: var(--muted); }
+  .term-wrap { background: #07090c; border: 2px solid var(--line); border-radius: 10px; padding: 8px; height: 340px; }
+  .term-wrap .xterm { height: 100%; }
+  .seslabel { font-weight: 700; color: var(--blue); }
+  .branch-tag { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--faint); }
+  .btn-sm { font-family: var(--hand); font-size: 14px; border: 1.5px solid var(--line); background: #fff; padding: 5px 12px; border-radius: 9px; cursor: pointer; }
+  .btn-sm:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-sm.red { color: var(--red); }
+
+  #toast { position: fixed; top: 16px; right: 16px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
+  .toast { background: #fff; border: 1.5px solid var(--line); border-left: 4px solid var(--small); padding: 11px 15px; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.15); max-width: 380px; font-size: 13px; }
+  .toast.err { border-left-color: var(--red); }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+
+<div class="wrap">
+  <h1 class="greet">Good Morning, John</h1>
+  <div class="date" id="date">Loading…</div>
+
+  <div class="tokenbar" id="tokenbar">
+    <span>🔑 Server needs a token.</span>
+    <input id="tokenInput" placeholder="Paste SessionManager API token" />
+    <button class="btn-sm" onclick="saveToken()">Connect</button>
+  </div>
+
+  <div class="projbar" id="projbar"></div>
+  <hr class="rule" />
+
+  <div class="cols">
+    <!-- LEFT: feedback -->
+    <div>
+      <div class="panel-title">Here's feedback from various sources</div>
+      <div class="panel-sub">Slack · Email · Feedbase · Socials · Conversations</div>
+      <div class="box">
+        <div class="filters">
+          <span class="filt">Filter by account&nbsp; <select id="fAccount" onchange="setFilter('account',this.value)"></select></span>
+          <span class="filt">Filter by channel&nbsp; <select id="fChannel" onchange="setFilter('channel',this.value)"></select></span>
+        </div>
+        <div id="categories"></div>
+        <div class="refine-all"><span class="refine" onclick="refineAll()">⟶ Refine all</span></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: backlog jobs (self-authored) -->
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div>
+          <div class="panel-title">Backlog Jobs</div>
+          <div class="panel-sub">Task groups you create — things you want built</div>
+        </div>
+        <button class="btn-sm" onclick="newJob()">+ New Job</button>
+      </div>
+      <div class="jobs" id="jobs"></div>
+    </div>
+  </div>
+
+  <!-- STAGING: refined, ready to build -->
+  <div class="stage">
+    <div class="panel-title">Refined — ready to build</div>
+    <div class="classline">Each card runs in <b>parallel on its own worktree</b> · backlog jobs are their own workspace · feedback shares one workspace per project — <b>split</b> a ticket to give it its own.</div>
+    <div class="stage-cards" id="stageCards"></div>
+    <div class="gobar">
+      <button class="btn" id="goBtn" onclick="dispatch()">🚀 Build &amp; send</button>
+      <span class="gohint" id="goHint"></span>
+      <button class="btn-sm" onclick="resetDemo()" title="Restore inbox from seed">↺ Reset</button>
+      <span class="gohint" style="margin-left:auto">Session Manager · VPS · SSH &nbsp; <span class="refine" onclick="openLogs()">Logs ↗</span></span>
+    </div>
+    <div class="progress-box" id="progressBox"></div>
+  </div>
+</div>
+
+<!-- Planning modal -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <div class="modal-head"><h2 id="mTitle"></h2><div class="sub" id="mSub"></div></div>
+    <div class="modal-body">
+      <div class="ctx" id="mCtx"></div>
+      <label class="field-label">Your guidelines / constraints (seeded into the session as context)</label>
+      <textarea id="mGuidelines" rows="2" placeholder="Constraints, approach, what to reuse, what NOT to touch… save before starting to seed them."></textarea>
+      <div style="height:14px"></div>
+      <label class="field-label">Planning session — a live Claude in this item's worktree</label>
+      <div style="margin:4px 0 16px">
+        <div class="plan-warn" id="mPlanWarn" style="display:none"></div>
+        <div class="plan-toolbar">
+          <button class="btn-sm red" id="mStartBtn" onclick="startPlanning()">▶ Start planning session</button>
+          <span class="plan-note" id="mPlanStatus"></span>
+        </div>
+        <div class="term-wrap" id="mTermWrap" style="display:none"><div id="planTerm"></div></div>
+      </div>
+      <label class="field-label">Refined plan — what gets executed (pull from PLAN.md, or edit here)</label>
+      <textarea id="mSpec" rows="6" placeholder="Agree on a plan, ask Claude to save it to PLAN.md, then pull it here…"></textarea>
+      <div style="margin-top:8px"><button class="btn-sm" id="mPullBtn" onclick="pullPlan()" disabled>⬇ Pull plan from PLAN.md</button></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-sm" onclick="closeModal()">Close</button>
+      <button class="btn" onclick="approvePlan()">✓ Approve → adds to Backlog Jobs</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- transport ----
+const BASE = localStorage.getItem('sm_base') || '';
+const _qtoken = new URLSearchParams(location.search).get('token');
+if (_qtoken) localStorage.setItem('sm_token', _qtoken);
+let TOKEN = _qtoken || localStorage.getItem('sm_token') || '';
+function authHeaders(extra) { return Object.assign({ Authorization: 'Bearer ' + TOKEN }, extra || {}); }
+async function api(path, opts) {
+  opts = opts || {}; opts.headers = authHeaders(opts.headers);
+  const res = await fetch(BASE + path, opts);
+  if (res.status === 401) { document.getElementById('tokenbar').classList.add('show'); throw new Error('unauthorized'); }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.status === 204 ? null : res.json();
+}
+function saveToken() { TOKEN = document.getElementById('tokenInput').value.trim(); localStorage.setItem('sm_token', TOKEN);
+  document.getElementById('tokenbar').classList.remove('show'); load(); }
+
+// ---- state ----
+let INBOX = null, PROJECTS = [], planningId = null;
+let selectedProject = 'All';
+const filters = { account: '', channel: '' };
+const SIZES = ['small', 'medium', 'large'];
+const SIZE_LABEL = { small: 'Simple', medium: 'Medium', large: 'Complex' };
+const CAT_ORDER = ['bug', 'feature', 'idea', 'chore', 'feedback'];
+const CAT_LABEL = { bug: 'Bugs', feature: 'Features', idea: 'Ideas', chore: 'Chores', feedback: 'Feedback' };
+
+function effSize(it) { return it.size || it.suggestedSize; }
+function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function getItem(id) { return INBOX.items.find(i => i.id === id); }
+
+async function load() {
+  try {
+    const [inbox, projects] = await Promise.all([api('/api/triage/inbox'), api('/api/projects').catch(() => [])]);
+    INBOX = inbox; PROJECTS = projects || [];
+    renderAll();
+  } catch (e) { if (e.message !== 'unauthorized') toast('Failed to load: ' + e.message, true); }
+}
+
+// items visible under the current project + account(customer)/channel(source) filters
+function viewItems() {
+  return INBOX.items.filter(it =>
+    (selectedProject === 'All' || it.targetProject === selectedProject) &&
+    (!filters.account || it.account === filters.account) &&
+    (!filters.channel || it.channel === filters.channel));
+}
+
+function renderAll() {
+  if (!INBOX) return;
+  renderHeader(); renderProjects(); renderFilters(); renderCategories(); renderJobs(); renderStaging();
+}
+
+function renderHeader() {
+  const d = new Date(INBOX.date + 'T00:00:00');
+  const ds = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const n = INBOX.items.length, refined = INBOX.items.filter(i => i.triageStatus !== 'pending').length;
+  document.getElementById('date').textContent = `${ds} — ${n} items in, ${refined} refined`;
+}
+
+function renderProjects() {
+  const names = Array.from(new Set(INBOX.items.map(i => i.targetProject))).sort();
+  const tabs = ['All', ...names];
+  document.getElementById('projbar').innerHTML =
+    `<span class="lead">Project:</span>` +
+    tabs.map(t => `<span class="ptab ${selectedProject === t ? 'on' : ''}" onclick="selectProject('${esc(t)}')">${t === 'All' ? 'All Projects' : esc(t)}</span>`).join('');
+}
+function selectProject(p) { selectedProject = p; filters.account = ''; filters.channel = ''; renderAll(); }
+
+function renderFilters() {
+  // account/channel options come from the whole project view (ignoring the other filter)
+  const base = INBOX.items.filter(i => selectedProject === 'All' || i.targetProject === selectedProject);
+  const accounts = Array.from(new Set(base.map(i => i.account))).sort();
+  const channels = Array.from(new Set(base.map(i => i.channel))).sort();
+  document.getElementById('fAccount').innerHTML = `<option value="">all customers</option>` +
+    accounts.map(a => `<option ${filters.account === a ? 'selected' : ''}>${esc(a)}</option>`).join('');
+  document.getElementById('fChannel').innerHTML = `<option value="">all sources</option>` +
+    channels.map(c => `<option ${filters.channel === c ? 'selected' : ''}>${esc(c)}</option>`).join('');
+}
+function setFilter(k, v) { filters[k] = v; renderCategories(); }
+
+// LEFT — feedback (not yet built), grouped into categories by type.
+// pending items show the refine affordance; approved (refined) show a ✓.
+function renderCategories() {
+  const live = viewItems().filter(i => i.triageStatus !== 'dispatched');
+  const el = document.getElementById('categories');
+  if (!live.length) { el.innerHTML = `<div class="empty-hand">All caught up — no feedback left to refine. 🎉</div>`; return; }
+  const types = CAT_ORDER.filter(t => live.some(i => i.type === t));
+  el.innerHTML = types.map((t, idx) => {
+    const rows = live.filter(i => i.type === t).map(it => {
+      const size = effSize(it);
+      const refined = it.triageStatus === 'approved';
+      const picks = SIZES.map(s => `<button class="${s} ${size === s ? 'on ' + s : ''}" title="${SIZE_LABEL[s]}" onclick="setSize('${it.id}','${s}')">${SIZE_LABEL[s][0]}</button>`).join('');
+      return `<div class="fb-row" ${refined ? 'style="opacity:.6"' : ''}>
+        <div class="fb-main">
+          <span class="sizepick">${picks}</span>
+          <span class="fb-title" onclick="openPlan('${it.id}')" title="Open / refine">${refined ? '✓ ' : ''}${esc(it.title)}</span>
+        </div>
+        <span class="fb-src">${esc(it.sourceDetail)}</span>
+      </div>`;
+    }).join('');
+    const pendingCount = live.filter(i => i.type === t && i.triageStatus === 'pending').length;
+    return `<div class="cat">
+      <div class="cat-head"><span class="cat-name">Category ${idx + 1} · ${CAT_LABEL[t]}</span>
+        ${pendingCount ? `<span class="refine" onclick="refineCategory('${t}')">refine</span>` : ''}</div>
+      ${rows}
+    </div>`;
+  }).join('');
+}
+
+// RIGHT — self-authored backlog jobs (your own task groups)
+function jobsView() {
+  return (INBOX.jobs || []).filter(j => selectedProject === 'All' || j.project === selectedProject);
+}
+function projectOptions(sel) {
+  const names = Array.from(new Set([...INBOX.items.map(i => i.targetProject), ...(INBOX.jobs || []).map(j => j.project), ...PROJECTS.map(p => p.name)]));
+  return names.sort().map(n => `<option ${n === sel ? 'selected' : ''}>${esc(n)}</option>`).join('');
+}
+function renderJobs() {
+  const jobs = jobsView();
+  const el = document.getElementById('jobs');
+  if (!jobs.length) { el.innerHTML = `<div class="empty-hand">No backlog jobs${selectedProject !== 'All' ? ' for this project' : ''}. Click <b>+ New Job</b> to add things you want built.</div>`; return; }
+  el.innerHTML = jobs.map((j, idx) => {
+    const dispatched = j.status === 'dispatched';
+    const tickets = j.tickets.map(t => `
+      <div class="ticket">
+        <button class="tk-size ${t.size}" title="cycle size" onclick="cycleTicketSize('${j.id}','${t.id}')">${SIZE_LABEL[t.size][0]}</button>
+        <input class="tk-title" value="${esc(t.title)}" ${dispatched ? 'disabled' : ''}
+          onchange="editTicket('${j.id}','${t.id}',this.value)" />
+        ${dispatched ? '' : `<button class="tk-del" onclick="deleteTicket('${j.id}','${t.id}')" title="remove">✕</button>`}
+      </div>`).join('') || `<div class="empty-hand" style="padding:4px 0">no tickets yet</div>`;
+    return `<div class="job ${dispatched ? 'dispatched' : ''}">
+      <div class="job-head">
+        <input class="job-name-input" value="${esc(j.name)}" ${dispatched ? 'disabled' : ''} onchange="renameJob('${j.id}',this.value)" />
+        ${dispatched ? '' : `<button class="job-del" onclick="deleteJob('${j.id}')" title="delete job">✕</button>`}
+      </div>
+      <select class="job-proj" ${dispatched ? 'disabled' : ''} onchange="setJobProject('${j.id}',this.value)">${projectOptions(j.project)}</select>
+      <div style="margin-top:8px">${tickets}</div>
+      ${dispatched ? `<div class="job-foot"><span class="job-count">✓ dispatched → building</span></div>` : `
+      <div class="add-ticket">
+        <input placeholder="Add a ticket…" onkeydown="if(event.key==='Enter'){addTicket('${j.id}',this)}" />
+      </div>
+      <div class="job-foot">
+        <span class="job-count">${j.tickets.length} ticket${j.tickets.length === 1 ? '' : 's'}</span>
+        <span class="refine" onclick="buildJob('${j.id}')">↗ build this job</span>
+      </div>`}
+    </div>`;
+  }).join('');
+}
+
+// ---- staging: one card per future parallel worktree ----
+const splitMap = {};        // feedbackItemId -> custom card id (split out of the shared card)
+const excluded = new Set();  // card ids the user removed from this build
+
+// Build the list of staging cards from current state (respects project filter).
+function stagingCards() {
+  const inProj = (p) => selectedProject === 'All' || p === selectedProject;
+  const cards = [];
+  const approved = INBOX.items.filter(i => i.triageStatus === 'approved' && inProj(i.targetProject));
+
+  // Planned feedback → each already has its own worktree (planning session)
+  approved.filter(i => i.planningSessionId).forEach(it =>
+    cards.push({ id: 'plan:' + it.id, kind: 'planned', name: it.title, project: it.targetProject, items: [it] }));
+
+  // Non-planned feedback → shared worktree per project, unless split out
+  const groups = {};
+  approved.filter(i => !i.planningSessionId).forEach(it => {
+    const cid = splitMap[it.id] || ('fb:' + it.targetProject);
+    (groups[cid] = groups[cid] || { id: cid, kind: 'feedback', project: it.targetProject, items: [] }).items.push(it);
+  });
+  Object.values(groups).forEach(c => cards.push(c));
+
+  // Backlog jobs → each its own worktree
+  (INBOX.jobs || []).filter(j => j.status === 'backlog' && j.tickets.length && inProj(j.project))
+    .forEach(j => cards.push({ id: 'job:' + j.id, kind: 'job', name: j.name, project: j.project, job: j }));
+
+  return cards;
+}
+
+function renderStaging() {
+  const cards = stagingCards();
+  const live = cards.filter(c => !excluded.has(c.id));
+  const el = document.getElementById('stageCards');
+  if (!cards.length) {
+    el.innerHTML = `<div class="empty-hand">Nothing staged yet — refine feedback on the left, or add a backlog job, and it shows up here as a workspace.</div>`;
+  } else {
+    el.innerHTML = cards.map(c => renderCard(c)).join('');
+  }
+  document.getElementById('goBtn').disabled = live.length === 0;
+  document.getElementById('goBtn').textContent = `🚀 Build & send${live.length ? ' (' + live.length + ')' : ''}`;
+  const wt = live.length;
+  document.getElementById('goHint').textContent = wt ? `${wt} parallel workspace${wt === 1 ? '' : 's'}` : 'refine feedback or add a backlog job first';
+
+  // progress
+  const dFb = INBOX.items.filter(i => i.triageStatus === 'dispatched');
+  const dJobs = (INBOX.jobs || []).filter(j => j.status === 'dispatched');
+  const pbox = document.getElementById('progressBox');
+  if (!dFb.length && !dJobs.length) { pbox.innerHTML = `<b>Progress tracking</b> — nothing dispatched yet`; }
+  else {
+    const byProj = {};
+    dFb.forEach(i => { byProj[i.targetProject] = (byProj[i.targetProject] || 0) + 1; });
+    dJobs.forEach(j => { byProj[j.project] = (byProj[j.project] || 0) + j.tickets.length; });
+    pbox.innerHTML = `<b>Progress tracking</b> &nbsp; ` +
+      Object.entries(byProj).map(([p, n]) => `▸ ${esc(p)} · ${n} building`).join(' &nbsp; ');
+  }
+}
+
+function renderCard(c) {
+  const ex = excluded.has(c.id);
+  let tickets = '', foot = '';
+  if (c.kind === 'job') {
+    tickets = c.job.tickets.map(t => `<div class="ticket"><span class="tk-size ${t.size}">${SIZE_LABEL[t.size][0]}</span><span class="tk-title" style="border:0">${esc(t.title)}</span></div>`).join('');
+  } else if (c.kind === 'planned') {
+    const it = c.items[0]; const s = effSize(it);
+    tickets = `<div class="ticket"><span class="tk-size ${s}">${SIZE_LABEL[s][0]}</span><span class="tk-title" style="border:0">${esc(it.title)}</span></div>`;
+  } else { // feedback (shared, splittable)
+    tickets = c.items.map(it => {
+      const s = effSize(it); const split = !!splitMap[it.id];
+      const act = split
+        ? `<span class="split-btn" onclick="unsplit('${it.id}')">↩ merge</span>`
+        : (c.items.length > 1 ? `<span class="split-btn" onclick="split('${it.id}')">split ↗</span>` : '');
+      return `<div class="ticket"><span class="tk-size ${s}">${SIZE_LABEL[s][0]}</span><span class="tk-title" style="border:0">${esc(it.title)}</span>${act}</div>`;
+    }).join('');
+  }
+  const name = c.kind === 'feedback'
+    ? (splitMap[c.items[0]?.id] ? esc(c.items[0].title).slice(0, 40) : 'Feedback')
+    : esc(c.name);
+  const tag = c.kind === 'planned' ? 'planned wt' : 'worktree';
+  return `<div class="scard kind-${c.kind} ${ex ? 'excluded' : ''}">
+    <div class="scard-head"><span class="scard-name">${name}</span>
+      <span style="display:flex;gap:6px;align-items:center"><span class="wt-tag">${tag}</span>
+      <button class="scard-x" onclick="toggleExclude('${c.id}')" title="${ex ? 'include' : 'exclude from build'}">${ex ? '+' : '✕'}</button></span></div>
+    <div class="scard-proj">${esc(c.project)}</div>
+    ${tickets}
+  </div>`;
+}
+function split(id) { splitMap[id] = 'split:' + id; renderStaging(); }
+function unsplit(id) { delete splitMap[id]; renderStaging(); }
+function toggleExclude(cid) { excluded.has(cid) ? excluded.delete(cid) : excluded.add(cid); renderStaging(); }
+
+// ---- mutations ----
+async function patch(id, updates) {
+  Object.assign(getItem(id), updates); renderAll();
+  try { await api('/api/triage/items/' + id, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) }); }
+  catch (e) { toast('Save failed: ' + e.message, true); }
+}
+function setSize(id, size) {
+  const upd = { size };
+  if (size !== 'large') upd.autoQueue = true;
+  patch(id, upd);
+}
+
+function suggestedSpec(it) {
+  return `Goal: ${it.title}\n\nContext: ${it.body}\n\nApproach: investigate the relevant area of ${it.targetProject}, make a scoped change, verify, and open a PR.`;
+}
+// Refine one item: complex → Claude chat; simple/medium → auto-suggested spec + approve
+function refineItem(id) {
+  const it = getItem(id);
+  if (it.triageStatus !== 'pending') return;
+  if (effSize(it) === 'large') { openPlan(id); return false; }
+  patch(id, { enrichedSpec: suggestedSpec(it), triageStatus: 'approved' });
+  return true;
+}
+function refineGroup(items) {
+  let auto = 0, complex = 0;
+  items.forEach(it => { if (it.triageStatus !== 'pending') return; if (effSize(it) === 'large') complex++; else { refineItem(it.id); auto++; } });
+  const msg = `${auto} auto-refined → Backlog Jobs` + (complex ? ` · ${complex} complex need a Claude chat (click them)` : '');
+  toast(msg);
+}
+function refineCategory(type) { refineGroup(viewItems().filter(i => i.type === type && i.triageStatus === 'pending')); }
+function refineAll() { refineGroup(viewItems().filter(i => i.triageStatus === 'pending')); }
+
+// ---- backlog jobs (self-authored) ----
+const SIZE_CYCLE = { small: 'medium', medium: 'large', large: 'small' };
+async function newJob() {
+  const project = selectedProject !== 'All' ? selectedProject : (INBOX.items[0]?.targetProject || 'new-project');
+  const job = await api('/api/triage/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'New job', project }) });
+  INBOX.jobs.push(job); renderJobs();
+}
+async function jobPut(jid, updates) {
+  const j = INBOX.jobs.find(x => x.id === jid); Object.assign(j, updates); renderJobs();
+  try { await api('/api/triage/jobs/' + jid, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) }); } catch (e) { toast('Save failed: ' + e.message, true); }
+}
+function renameJob(jid, name) { jobPut(jid, { name: name.trim() || 'Untitled job' }); }
+function setJobProject(jid, project) { jobPut(jid, { project }); renderStaging(); }
+async function deleteJob(jid) {
+  INBOX.jobs = INBOX.jobs.filter(j => j.id !== jid); renderJobs(); renderStaging();
+  try { await api('/api/triage/jobs/' + jid, { method: 'DELETE' }); } catch {}
+}
+async function addTicket(jid, inputEl) {
+  const title = inputEl.value.trim(); if (!title) return; inputEl.value = '';
+  const t = await api('/api/triage/jobs/' + jid + '/tickets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, size: 'medium' }) });
+  INBOX.jobs.find(j => j.id === jid).tickets.push(t); renderJobs(); renderStaging();
+}
+async function editTicket(jid, tid, title) {
+  const t = INBOX.jobs.find(j => j.id === jid).tickets.find(x => x.id === tid); t.title = title;
+  try { await api('/api/triage/jobs/' + jid + '/tickets/' + tid, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) }); } catch {}
+}
+async function cycleTicketSize(jid, tid) {
+  const t = INBOX.jobs.find(j => j.id === jid).tickets.find(x => x.id === tid); t.size = SIZE_CYCLE[t.size]; renderJobs();
+  try { await api('/api/triage/jobs/' + jid + '/tickets/' + tid, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ size: t.size }) }); } catch {}
+}
+async function deleteTicket(jid, tid) {
+  const j = INBOX.jobs.find(x => x.id === jid); j.tickets = j.tickets.filter(t => t.id !== tid); renderJobs(); renderStaging();
+  try { await api('/api/triage/jobs/' + jid + '/tickets/' + tid, { method: 'DELETE' }); } catch {}
+}
+async function buildJob(jid) { await runBuild({ jobIds: [jid] }); }
+
+// ---- planning modal (embedded Claude terminal) ----
+let term = null, termFit = null, termPoll = null, termBytes = 0, termSid = null;
+function openPlan(id) {
+  planningId = id;
+  const it = getItem(id);
+  document.getElementById('mTitle').textContent = it.title;
+  document.getElementById('mSub').textContent = `${it.sourceDetail} · ${it.type} · target: ${it.targetProject}`;
+  document.getElementById('mCtx').textContent = it.body;
+  document.getElementById('mGuidelines').value = it.guidelines || '';
+  document.getElementById('mSpec').value = it.enrichedSpec || '';
+  document.getElementById('mPlanWarn').style.display = 'none';
+  document.getElementById('mTermWrap').style.display = 'none';
+  document.getElementById('mPullBtn').disabled = true;
+  document.getElementById('modalBg').classList.add('show');
+  if (it.planningSessionId) {
+    document.getElementById('mStartBtn').textContent = '↻ Reconnect session';
+    document.getElementById('mPlanStatus').textContent = 'session open';
+    connectTerminal(it.planningSessionId);
+  } else {
+    document.getElementById('mStartBtn').textContent = '▶ Start planning session';
+    document.getElementById('mPlanStatus').textContent = '';
+  }
+}
+function closeModal() { document.getElementById('modalBg').classList.remove('show'); teardownTerminal(); planningId = null; }
+function teardownTerminal() { if (termPoll) { clearInterval(termPoll); termPoll = null; } if (term) { try { term.dispose(); } catch {} term = null; } termFit = null; termBytes = 0; termSid = null; }
+
+async function startPlanning() {
+  const id = planningId;
+  await patch(id, { guidelines: document.getElementById('mGuidelines').value });
+  document.getElementById('mStartBtn').disabled = true;
+  document.getElementById('mPlanStatus').textContent = 'starting…';
+  try {
+    const r = await api('/api/triage/items/' + id + '/plan', { method: 'POST' });
+    getItem(id).planningSessionId = r.sessionId; getItem(id).planningProjectId = r.projectId;
+    document.getElementById('mStartBtn').textContent = '↻ Reconnect session';
+    const branchTxt = r.branch ? ` · <span class="branch-tag">${esc(r.branch)}</span>` : '';
+    document.getElementById('mPlanStatus').innerHTML = `<span class="seslabel">${esc(r.sessionLabel || '')}</span>${branchTxt}`;
+    if (!r.ptyOk) { document.getElementById('mPlanWarn').style.display = '';
+      document.getElementById('mPlanWarn').textContent = '⚠ Session created, but Claude could not start here (PTYs unavailable in this environment). On the VPS this is a live Claude chat in the worktree.'; }
+    connectTerminal(r.sessionId);
+  } catch (e) { document.getElementById('mPlanStatus').textContent = 'failed: ' + e.message; }
+  finally { document.getElementById('mStartBtn').disabled = false; }
+}
+async function connectTerminal(sessionId) {
+  teardownTerminal(); termSid = sessionId;
+  document.getElementById('mTermWrap').style.display = ''; document.getElementById('mPullBtn').disabled = false;
+  term = new Terminal({ convertEol: true, fontSize: 12, theme: { background: '#07090c' }, scrollback: 4000 });
+  termFit = new FitAddon.FitAddon(); term.loadAddon(termFit);
+  term.open(document.getElementById('planTerm')); try { termFit.fit(); } catch {}
+  term.onData(d => { fetch(BASE + `/api/sessions/${sessionId}/input`, { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ data: d }) }).catch(() => {}); });
+  try { await fetch(BASE + `/api/sessions/${sessionId}/resize`, { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ cols: term.cols, rows: term.rows }) }); } catch {}
+  termBytes = 0; await pumpHistory(sessionId); termPoll = setInterval(() => pumpHistory(sessionId), 800);
+}
+async function pumpHistory(sessionId) {
+  if (termSid !== sessionId || !term) return;
+  try {
+    const qs = termBytes > 0 ? `?after=${termBytes}` : '';
+    const res = await fetch(BASE + `/api/sessions/${sessionId}/history${qs}`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const txt = await res.text(); const total = parseInt(res.headers.get('X-Sm-Total-Bytes') || '0', 10) || 0;
+    if (txt) term.write(txt); termBytes = total;
+  } catch {}
+}
+async function pullPlan() {
+  try { const r = await api('/api/triage/items/' + planningId + '/plan/file?name=PLAN.md');
+    document.getElementById('mSpec').value = r.content; toast('Pulled PLAN.md into the refined plan.'); }
+  catch { toast('No PLAN.md yet — ask Claude to save the plan first.', true); }
+}
+async function approvePlan() {
+  await patch(planningId, { guidelines: document.getElementById('mGuidelines').value, enrichedSpec: document.getElementById('mSpec').value, triageStatus: 'approved' });
+  closeModal(); toast('Approved — added to Backlog Jobs, ready to build.');
+}
+
+// ---- build (dispatch) ----
+async function runBuild(payload) {
+  if (!(payload.itemIds || []).length && !(payload.groups || []).length && !(payload.jobIds || []).length) return;
+  document.getElementById('goBtn').disabled = true;
+  try {
+    const r = await api('/api/triage/dispatch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ useClaude: true, jobLabel: 'Triage ' + INBOX.date }, payload)) });
+    const lines = r.jobs.map(j => `${j.projectName} → ${j.sessionLabel}${j.reusedPlanning ? ' (planning)' : ''} (${j.taskIds.length})${j.playing ? ' ▶' : ' queued'}`).join(' · ');
+    toast(`🚀 ${r.jobs.length} workspace${r.jobs.length === 1 ? '' : 's'} building: ${lines}`);
+    Object.keys(splitMap).forEach(k => delete splitMap[k]); excluded.clear();
+    await load();
+  } catch (e) { toast('Build failed: ' + e.message, true); document.getElementById('goBtn').disabled = false; }
+}
+// global Build: turn each staged card into a parallel workspace
+function dispatch() {
+  const cards = stagingCards().filter(c => !excluded.has(c.id));
+  const itemIds = [], groups = [], jobIds = [];
+  cards.forEach(c => {
+    if (c.kind === 'planned') itemIds.push(c.items[0].id);          // reuse its planning worktree
+    else if (c.kind === 'feedback') groups.push({ name: 'Feedback · ' + c.project, project: c.project, itemIds: c.items.map(i => i.id) });
+    else if (c.kind === 'job') jobIds.push(c.job.id);
+  });
+  runBuild({ itemIds, groups, jobIds });
+}
+function openLogs() { toast('Live logs/terminals are in the SessionManager app — each job streams there.'); }
+async function resetDemo() { try { INBOX = await api('/api/triage/reset', { method: 'POST' }); selectedProject = 'All'; renderAll(); toast('Inbox reset to seed.'); } catch (e) { toast('Reset failed: ' + e.message, true); } }
+
+function toast(msg, err) { const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.innerHTML = msg;
+  document.getElementById('toast').appendChild(t); setTimeout(() => t.remove(), err ? 6000 : 5000); }
+document.getElementById('modalBg').addEventListener('click', e => { if (e.target.id === 'modalBg') closeModal(); });
+
+load();
+</script>
+</body>
+</html>
