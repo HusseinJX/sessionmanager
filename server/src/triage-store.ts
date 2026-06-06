@@ -53,6 +53,12 @@ export interface BacklogJob {
   tickets: JobTicket[]
   status: 'backlog' | 'dispatched'
   createdAt: number
+  // Planning fields (mirror FeedbackItem): set when a live Claude planning
+  // session is opened for the whole job, and refined together.
+  guidelines?: string
+  enrichedSpec?: string
+  planningSessionId?: string
+  planningProjectId?: string
   dispatchedProjectId?: string
   dispatchedSessionId?: string
   dispatchedAt?: string
@@ -177,7 +183,7 @@ export function addJob(name: string, project: string): BacklogJob {
 export function updateJob(jobId: string, updates: Partial<BacklogJob>): BacklogJob | null {
   const job = getJob(jobId)
   if (!job) return null
-  const allowed: (keyof BacklogJob)[] = ['name', 'project', 'status', 'dispatchedProjectId', 'dispatchedSessionId', 'dispatchedAt']
+  const allowed: (keyof BacklogJob)[] = ['name', 'project', 'status', 'guidelines', 'enrichedSpec', 'planningSessionId', 'planningProjectId', 'dispatchedProjectId', 'dispatchedSessionId', 'dispatchedAt']
   for (const k of allowed) if (k in updates) (job as any)[k] = (updates as any)[k]
   save()
   return job

@@ -263,7 +263,7 @@ function saveToken() { TOKEN = document.getElementById('tokenInput').value.trim(
   document.getElementById('tokenbar').classList.remove('show'); load(); }
 
 // ---- state ----
-let INBOX = null, PROJECTS = [], planningId = null;
+let INBOX = null, PROJECTS = [], planningId = null, planningGroup = null, planningJobId = null;
 let selectedProject = 'All';
 const filters = { account: '', channel: '' };
 const SIZES = ['small', 'medium', 'large'];
@@ -344,10 +344,9 @@ function renderCategories() {
         <span class="fb-src">${esc(it.sourceDetail)}</span>
       </div>`;
     }).join('');
-    const pendingCount = live.filter(i => i.type === t && i.triageStatus === 'pending').length;
     return `<div class="cat">
       <div class="cat-head"><span class="cat-name">Category ${idx + 1} · ${CAT_LABEL[t]}</span>
-        ${pendingCount ? `<span class="refine" onclick="refineCategory('${t}')">refine</span>` : ''}</div>
+        <span class="refine" onclick="openPlanCategory('${t}')" title="Plan every ticket in this category together in one Claude session">refine</span></div>
       ${rows}
     </div>`;
   }).join('');
@@ -379,15 +378,18 @@ function renderJobs() {
         <input class="job-name-input" value="${esc(j.name)}" ${dispatched ? 'disabled' : ''} onchange="renameJob('${j.id}',this.value)" />
         ${dispatched ? '' : `<button class="job-del" onclick="deleteJob('${j.id}')" title="delete job">✕</button>`}
       </div>
-      <select class="job-proj" ${dispatched ? 'disabled' : ''} onchange="setJobProject('${j.id}',this.value)">${projectOptions(j.project)}</select>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select class="job-proj" ${dispatched ? 'disabled' : ''} style="flex:1" onchange="setJobProject('${j.id}',this.value)">${projectOptions(j.project)}</select>
+        ${dispatched ? '' : `<button class="btn-sm" title="${stagedJobs.has(j.id) ? 'remove from build staging' : 'add to Refined — ready to build'}" onclick="toggleStageJob('${j.id}')">${stagedJobs.has(j.id) ? '✓ staged' : '+ stage'}</button>`}
+      </div>
       <div style="margin-top:8px">${tickets}</div>
       ${dispatched ? `<div class="job-foot"><span class="job-count">✓ dispatched → building</span></div>` : `
       <div class="add-ticket">
         <input placeholder="Add a ticket…" onkeydown="if(event.key==='Enter'){addTicket('${j.id}',this)}" />
       </div>
       <div class="job-foot">
-        <span class="job-count">${j.tickets.length} ticket${j.tickets.length === 1 ? '' : 's'}</span>
-        <span class="refine" onclick="buildJob('${j.id}')">↗ build this job</span>
+        <span class="job-count">${j.tickets.length} ticket${j.tickets.length === 1 ? '' : 's'}${j.planningSessionId ? ' · planned' : ''}</span>
+        <span class="refine" onclick="openPlanJob('${j.id}')" title="Plan all tickets in this job together in one Claude session">↗ plan this job</span>
       </div>`}
     </div>`;
   }).join('');
@@ -396,6 +398,9 @@ function renderJobs() {
 // ---- staging: one card per future parallel worktree ----
 const splitMap = {};        // feedbackItemId -> custom card id (split out of the shared card)
 const excluded = new Set();  // card ids the user removed from this build
+const stagedJobs = new Set(); // backlog job ids explicitly added to the staging area
+function toggleStageJob(jid) { stagedJobs.has(jid) ? stagedJobs.delete(jid) : stagedJobs.add(jid); renderJobs(); renderStaging(); }
+function unstageJob(jid) { stagedJobs.delete(jid); renderJobs(); renderStaging(); }
 
 // Build the list of staging cards from current state (respects project filter).
 function stagingCards() {
@@ -403,9 +408,13 @@ function stagingCards() {
   const cards = [];
   const approved = INBOX.items.filter(i => i.triageStatus === 'approved' && inProj(i.targetProject));
 
-  // Planned feedback → each already has its own worktree (planning session)
-  approved.filter(i => i.planningSessionId).forEach(it =>
-    cards.push({ id: 'plan:' + it.id, kind: 'planned', name: it.title, project: it.targetProject, items: [it] }));
+  // Planned feedback → grouped by planning session (one warm worktree each).
+  const plannedGroups = {};
+  approved.filter(i => i.planningSessionId).forEach(it => {
+    const k = 'plan:' + it.planningSessionId;
+    (plannedGroups[k] = plannedGroups[k] || { id: k, kind: 'planned', name: it.title, project: it.targetProject, items: [] }).items.push(it);
+  });
+  Object.values(plannedGroups).forEach(c => { if (c.items.length > 1) c.name = `${c.items.length} planned tickets`; cards.push(c); });
 
   // Non-planned feedback → shared worktree per project, unless split out
   const groups = {};
@@ -415,8 +424,8 @@ function stagingCards() {
   });
   Object.values(groups).forEach(c => cards.push(c));
 
-  // Backlog jobs → each its own worktree
-  (INBOX.jobs || []).filter(j => j.status === 'backlog' && j.tickets.length && inProj(j.project))
+  // Backlog jobs → each its own worktree, but ONLY once explicitly staged (+ stage).
+  (INBOX.jobs || []).filter(j => j.status === 'backlog' && j.tickets.length && inProj(j.project) && stagedJobs.has(j.id))
     .forEach(j => cards.push({ id: 'job:' + j.id, kind: 'job', name: j.name, project: j.project, job: j }));
 
   return cards;
@@ -456,8 +465,7 @@ function renderCard(c) {
   if (c.kind === 'job') {
     tickets = c.job.tickets.map(t => `<div class="ticket"><span class="tk-size ${t.size}">${SIZE_LABEL[t.size][0]}</span><span class="tk-title" style="border:0">${esc(t.title)}</span></div>`).join('');
   } else if (c.kind === 'planned') {
-    const it = c.items[0]; const s = effSize(it);
-    tickets = `<div class="ticket"><span class="tk-size ${s}">${SIZE_LABEL[s][0]}</span><span class="tk-title" style="border:0">${esc(it.title)}</span></div>`;
+    tickets = c.items.map(it => { const s = effSize(it); return `<div class="ticket"><span class="tk-size ${s}">${SIZE_LABEL[s][0]}</span><span class="tk-title" style="border:0">${esc(it.title)}</span></div>`; }).join('');
   } else { // feedback (shared, splittable)
     tickets = c.items.map(it => {
       const s = effSize(it); const split = !!splitMap[it.id];
@@ -471,10 +479,14 @@ function renderCard(c) {
     ? (splitMap[c.items[0]?.id] ? esc(c.items[0].title).slice(0, 40) : 'Feedback')
     : esc(c.name);
   const tag = c.kind === 'planned' ? 'planned wt' : 'worktree';
+  // Job cards are explicitly staged — the ✕ removes them from staging entirely.
+  const xBtn = c.kind === 'job'
+    ? `<button class="scard-x" onclick="unstageJob('${c.job.id}')" title="remove from build staging">✕</button>`
+    : `<button class="scard-x" onclick="toggleExclude('${c.id}')" title="${ex ? 'include' : 'exclude from build'}">${ex ? '+' : '✕'}</button>`;
   return `<div class="scard kind-${c.kind} ${ex ? 'excluded' : ''}">
     <div class="scard-head"><span class="scard-name">${name}</span>
       <span style="display:flex;gap:6px;align-items:center"><span class="wt-tag">${tag}</span>
-      <button class="scard-x" onclick="toggleExclude('${c.id}')" title="${ex ? 'include' : 'exclude from build'}">${ex ? '+' : '✕'}</button></span></div>
+      ${xBtn}</span></div>
     <div class="scard-proj">${esc(c.project)}</div>
     ${tickets}
   </div>`;
@@ -512,8 +524,14 @@ function refineGroup(items) {
   const msg = `${auto} auto-refined → Backlog Jobs` + (complex ? ` · ${complex} complex need a Claude chat (click them)` : '');
   toast(msg);
 }
-function refineCategory(type) { refineGroup(viewItems().filter(i => i.type === type && i.triageStatus === 'pending')); }
 function refineAll() { refineGroup(viewItems().filter(i => i.triageStatus === 'pending')); }
+// Category "refine": open the planning modal for EVERY ticket in the category,
+// one shared Claude planning session — same model as opening a single ticket.
+function openPlanCategory(type) {
+  const items = viewItems().filter(i => i.type === type && i.triageStatus !== 'dispatched');
+  if (!items.length) { toast('Nothing left to plan in this category.'); return; }
+  openPlanGroup(items.map(i => i.id), 'Category · ' + CAT_LABEL[type]);
+}
 
 // ---- backlog jobs (self-authored) ----
 const SIZE_CYCLE = { small: 'medium', medium: 'large', large: 'small' };
@@ -549,11 +567,37 @@ async function deleteTicket(jid, tid) {
   const j = INBOX.jobs.find(x => x.id === jid); j.tickets = j.tickets.filter(t => t.id !== tid); renderJobs(); renderStaging();
   try { await api('/api/triage/jobs/' + jid + '/tickets/' + tid, { method: 'DELETE' }); } catch {}
 }
-async function buildJob(jid) { await runBuild({ jobIds: [jid] }); }
+// Open the planning modal for a whole backlog job — one shared Claude session
+// over all its tickets, same model as a ticket/category.
+function openPlanJob(jid) {
+  const j = INBOX.jobs.find(x => x.id === jid);
+  if (!j) return;
+  if (!j.tickets.length) { toast('Add a ticket to this job first.'); return; }
+  planningJobId = jid; planningGroup = null; planningId = null;
+  document.getElementById('mTitle').textContent = `Job · ${j.name}`;
+  document.getElementById('mSub').textContent = `Plan all tickets together · target: ${j.project}`;
+  document.getElementById('mCtx').innerHTML = j.tickets.map((t, i) =>
+    `<div><b>${i + 1}. ${esc(t.title)}</b> <span style="opacity:.55">(${SIZE_LABEL[t.size]})</span></div>`).join('');
+  document.getElementById('mGuidelines').value = j.guidelines || '';
+  document.getElementById('mSpec').value = j.enrichedSpec || '';
+  document.getElementById('mPlanWarn').style.display = 'none';
+  document.getElementById('mTermWrap').style.display = 'none';
+  document.getElementById('mPullBtn').disabled = true;
+  document.getElementById('modalBg').classList.add('show');
+  if (j.planningSessionId) {
+    document.getElementById('mStartBtn').textContent = '↻ Reconnect session';
+    document.getElementById('mPlanStatus').textContent = 'session open';
+    connectTerminal(j.planningSessionId);
+  } else {
+    document.getElementById('mStartBtn').textContent = '▶ Start planning session';
+    document.getElementById('mPlanStatus').textContent = '';
+  }
+}
 
 // ---- planning modal (embedded Claude terminal) ----
 let term = null, termFit = null, termPoll = null, termBytes = 0, termSid = null;
 function openPlan(id) {
+  planningGroup = null; planningJobId = null;
   planningId = id;
   const it = getItem(id);
   document.getElementById('mTitle').textContent = it.title;
@@ -574,10 +618,40 @@ function openPlan(id) {
     document.getElementById('mPlanStatus').textContent = '';
   }
 }
-function closeModal() { document.getElementById('modalBg').classList.remove('show'); teardownTerminal(); planningId = null; }
+// Open the planning modal for a GROUP of items sharing one Claude session.
+function openPlanGroup(ids, label) {
+  planningGroup = ids.slice(); planningJobId = null;
+  planningId = ids[0]; // lead — used for PLAN.md pull (all share one worktree)
+  const items = ids.map(getItem).filter(Boolean);
+  const lead = items[0];
+  const projs = Array.from(new Set(items.map(i => i.targetProject)));
+  document.getElementById('mTitle').textContent = `${label} — ${items.length} ticket${items.length === 1 ? '' : 's'}`;
+  document.getElementById('mSub').textContent = `Plan all together · target: ${projs.join(', ')}`;
+  document.getElementById('mCtx').innerHTML = items.map((it, i) =>
+    `<div><b>${i + 1}. ${esc(it.title)}</b> <span style="opacity:.55">(${esc(it.targetProject)} · ${SIZE_LABEL[effSize(it)]})</span><br>${esc(it.body)}</div>`
+  ).join('<hr style="border:0;border-top:1px solid var(--line);margin:8px 0">');
+  document.getElementById('mGuidelines').value = lead.guidelines || '';
+  document.getElementById('mSpec').value = lead.enrichedSpec || '';
+  document.getElementById('mPlanWarn').style.display = 'none';
+  document.getElementById('mTermWrap').style.display = 'none';
+  document.getElementById('mPullBtn').disabled = true;
+  document.getElementById('modalBg').classList.add('show');
+  const sid = lead.planningSessionId;
+  if (sid) {
+    document.getElementById('mStartBtn').textContent = '↻ Reconnect session';
+    document.getElementById('mPlanStatus').textContent = 'session open';
+    connectTerminal(sid);
+  } else {
+    document.getElementById('mStartBtn').textContent = '▶ Start planning session';
+    document.getElementById('mPlanStatus').textContent = '';
+  }
+}
+function closeModal() { document.getElementById('modalBg').classList.remove('show'); teardownTerminal(); planningId = null; planningGroup = null; planningJobId = null; }
 function teardownTerminal() { if (termPoll) { clearInterval(termPoll); termPoll = null; } if (term) { try { term.dispose(); } catch {} term = null; } termFit = null; termBytes = 0; termSid = null; }
 
 async function startPlanning() {
+  if (planningJobId) return startPlanningJob();
+  if (planningGroup) return startPlanningGroup();
   const id = planningId;
   await patch(id, { guidelines: document.getElementById('mGuidelines').value });
   document.getElementById('mStartBtn').disabled = true;
@@ -585,6 +659,41 @@ async function startPlanning() {
   try {
     const r = await api('/api/triage/items/' + id + '/plan', { method: 'POST' });
     getItem(id).planningSessionId = r.sessionId; getItem(id).planningProjectId = r.projectId;
+    document.getElementById('mStartBtn').textContent = '↻ Reconnect session';
+    const branchTxt = r.branch ? ` · <span class="branch-tag">${esc(r.branch)}</span>` : '';
+    document.getElementById('mPlanStatus').innerHTML = `<span class="seslabel">${esc(r.sessionLabel || '')}</span>${branchTxt}`;
+    if (!r.ptyOk) { document.getElementById('mPlanWarn').style.display = '';
+      document.getElementById('mPlanWarn').textContent = '⚠ Session created, but Claude could not start here (PTYs unavailable in this environment). On the VPS this is a live Claude chat in the worktree.'; }
+    connectTerminal(r.sessionId);
+  } catch (e) { document.getElementById('mPlanStatus').textContent = 'failed: ' + e.message; }
+  finally { document.getElementById('mStartBtn').disabled = false; }
+}
+async function startPlanningGroup() {
+  const ids = planningGroup;
+  const guidelines = document.getElementById('mGuidelines').value;
+  document.getElementById('mStartBtn').disabled = true;
+  document.getElementById('mPlanStatus').textContent = 'starting…';
+  try {
+    const r = await api('/api/triage/plan-group', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemIds: ids, guidelines }) });
+    ids.forEach(id => { const it = getItem(id); if (it) { it.planningSessionId = r.sessionId; it.planningProjectId = r.projectId; it.guidelines = guidelines; } });
+    document.getElementById('mStartBtn').textContent = '↻ Reconnect session';
+    const branchTxt = r.branch ? ` · <span class="branch-tag">${esc(r.branch)}</span>` : '';
+    document.getElementById('mPlanStatus').innerHTML = `<span class="seslabel">${esc(r.sessionLabel || '')}</span>${branchTxt}`;
+    if (!r.ptyOk) { document.getElementById('mPlanWarn').style.display = '';
+      document.getElementById('mPlanWarn').textContent = '⚠ Session created, but Claude could not start here (PTYs unavailable in this environment). On the VPS this is a live Claude chat in the worktree.'; }
+    connectTerminal(r.sessionId);
+  } catch (e) { document.getElementById('mPlanStatus').textContent = 'failed: ' + e.message; }
+  finally { document.getElementById('mStartBtn').disabled = false; }
+}
+async function startPlanningJob() {
+  const jid = planningJobId;
+  const guidelines = document.getElementById('mGuidelines').value;
+  document.getElementById('mStartBtn').disabled = true;
+  document.getElementById('mPlanStatus').textContent = 'starting…';
+  try {
+    const r = await api('/api/triage/jobs/' + jid + '/plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guidelines }) });
+    const j = INBOX.jobs.find(x => x.id === jid);
+    if (j) { j.planningSessionId = r.sessionId; j.planningProjectId = r.projectId; j.guidelines = guidelines; }
     document.getElementById('mStartBtn').textContent = '↻ Reconnect session';
     const branchTxt = r.branch ? ` · <span class="branch-tag">${esc(r.branch)}</span>` : '';
     document.getElementById('mPlanStatus').innerHTML = `<span class="seslabel">${esc(r.sessionLabel || '')}</span>${branchTxt}`;
@@ -615,12 +724,30 @@ async function pumpHistory(sessionId) {
   } catch {}
 }
 async function pullPlan() {
-  try { const r = await api('/api/triage/items/' + planningId + '/plan/file?name=PLAN.md');
+  const path = planningJobId
+    ? '/api/triage/jobs/' + planningJobId + '/plan/file?name=PLAN.md'
+    : '/api/triage/items/' + planningId + '/plan/file?name=PLAN.md';
+  try { const r = await api(path);
     document.getElementById('mSpec').value = r.content; toast('Pulled PLAN.md into the refined plan.'); }
   catch { toast('No PLAN.md yet — ask Claude to save the plan first.', true); }
 }
 async function approvePlan() {
-  await patch(planningId, { guidelines: document.getElementById('mGuidelines').value, enrichedSpec: document.getElementById('mSpec').value, triageStatus: 'approved' });
+  const guidelines = document.getElementById('mGuidelines').value;
+  const enrichedSpec = document.getElementById('mSpec').value;
+  if (planningJobId) {
+    const jid = planningJobId;
+    await jobPut(jid, { guidelines, enrichedSpec });
+    stagedJobs.add(jid); renderJobs(); renderStaging();
+    closeModal(); toast('Plan saved & job staged — ready to build.');
+    return;
+  }
+  if (planningGroup) {
+    const n = planningGroup.length;
+    await Promise.all(planningGroup.map(id => patch(id, { guidelines, enrichedSpec, triageStatus: 'approved' })));
+    closeModal(); toast(`Approved ${n} ticket${n === 1 ? '' : 's'} — ready to build.`);
+    return;
+  }
+  await patch(planningId, { guidelines, enrichedSpec, triageStatus: 'approved' });
   closeModal(); toast('Approved — added to Backlog Jobs, ready to build.');
 }
 
@@ -642,7 +769,7 @@ function dispatch() {
   const cards = stagingCards().filter(c => !excluded.has(c.id));
   const itemIds = [], groups = [], jobIds = [];
   cards.forEach(c => {
-    if (c.kind === 'planned') itemIds.push(c.items[0].id);          // reuse its planning worktree
+    if (c.kind === 'planned') c.items.forEach(it => itemIds.push(it.id)); // reuse shared planning worktree (backend de-dups)
     else if (c.kind === 'feedback') groups.push({ name: 'Feedback · ' + c.project, project: c.project, itemIds: c.items.map(i => i.id) });
     else if (c.kind === 'job') jobIds.push(c.job.id);
   });

@@ -895,6 +895,77 @@ export class HttpApiServer {
       }
     }
 
+    // POST /api/triage/plan-group — open ONE live Claude planning session in a
+    // shared worktree, seeded with several tickets (a whole category), and link
+    // all of them to it. Same model as the single-item plan, for the whole group.
+    if (req.method === 'POST' && urlPath === '/api/triage/plan-group') {
+      this.readBody(req).then((body) => {
+        try {
+          const { itemIds = [], guidelines } = JSON.parse(body || '{}') as { itemIds?: string[]; guidelines?: string }
+          const items = itemIds.map((id) => getItem(id)).filter((it): it is FeedbackItem => !!it)
+          if (!items.length) return this.json(res, 404, { error: 'No items' }, req)
+          if (typeof guidelines === 'string') items.forEach((it) => updateItem(it.id, { guidelines }))
+
+          // Reuse a live shared session if any item already points at one.
+          const existing = items.find((it) => it.planningSessionId && this.sessionManager.getSessionMeta(it.planningSessionId))
+          if (existing) {
+            const meta = this.sessionManager.getSessionMeta(existing.planningSessionId!)!
+            items.forEach((it) => updateItem(it.id, { planningSessionId: existing.planningSessionId, planningProjectId: existing.planningProjectId }))
+            return this.json(res, 200, { sessionId: existing.planningSessionId, projectId: existing.planningProjectId, reused: true, cwd: meta.cwd }, req)
+          }
+
+          const lead = items[0]
+          const projects = getProjects()
+          let project = projects.find((p) => p.name.toLowerCase() === lead.targetProject.toLowerCase())
+          if (!project) project = addProject(lead.targetProject)
+
+          const label = computeSessionLabel(project.id)
+          const session = addSession(project.id, { name: `Plan: ${items.length} tickets`.slice(0, 60), cwd: '~', label })
+
+          const wt = createWorktree(project.name, getInbox().date, session.id)
+          let cwd: string
+          if (wt) {
+            cwd = wt.path
+          } else {
+            cwd = path.join(os.tmpdir(), 'sm-plan', session.id)
+            fs.mkdirSync(cwd, { recursive: true })
+          }
+          updateSessionFields(project.id, session.id, { cwd, worktree: wt ?? undefined })
+
+          try {
+            fs.writeFileSync(path.join(cwd, 'CONTEXT.md'), this.buildGroupContextMd(items))
+          } catch (e) { console.error('[triage/plan-group] CONTEXT.md write failed:', (e as Error)?.message) }
+
+          const seed = 'Read ./CONTEXT.md — it describes several related tasks to plan together. ' +
+            'Explore the relevant code, discuss with me, and help refine a single clear implementation ' +
+            'plan covering all of them. Do not write code yet; when we agree, I will ask you to save the plan to PLAN.md.'
+          const command = `claude --dangerously-skip-permissions "${seed}"`
+
+          let ptyOk = true
+          try {
+            this.sessionManager.createSession({
+              id: session.id, name: session.name, cwd, command,
+              projectId: project.id, projectName: project.name, label, status: 'running',
+            })
+          } catch (e) {
+            ptyOk = false
+            console.error('[triage/plan-group] PTY spawn failed:', (e as Error)?.message)
+          }
+
+          items.forEach((it) => updateItem(it.id, { planningSessionId: session.id, planningProjectId: project!.id }))
+          this.pushSse('session-created', { projectId: project.id, session })
+          return this.json(res, 200, {
+            sessionId: session.id, projectId: project.id, sessionLabel: label,
+            ptyOk, cwd, branch: wt ? wt.branch : null, itemIds: items.map((i) => i.id),
+          }, req)
+        } catch (e) {
+          console.error('[triage/plan-group]', e)
+          this.json(res, 500, { error: String((e as Error)?.message || e) }, req)
+        }
+      })
+      return
+    }
+
     // ===== Backlog Jobs (self-authored task groups) =====
 
     // POST /api/triage/jobs — create a job
@@ -960,6 +1031,96 @@ export class HttpApiServer {
       return
     }
 
+    // POST /api/triage/jobs/:jid/plan — open ONE live Claude planning session in
+    // a worktree, seeded with the whole job's tickets. Same model as item/group
+    // planning; links the session to the job so dispatch reuses it warm.
+    const jobPlanMatch = urlPath.match(/^\/api\/triage\/jobs\/([^/]+)\/plan$/)
+    if (req.method === 'POST' && jobPlanMatch) {
+      this.readBody(req).then((body) => {
+        try {
+          const jid = jobPlanMatch[1]
+          const job = getJob(jid)
+          if (!job) return this.json(res, 404, { error: 'Job not found' }, req)
+          const { guidelines } = (() => { try { return JSON.parse(body || '{}') } catch { return {} } })() as { guidelines?: string }
+          if (typeof guidelines === 'string') updateJob(jid, { guidelines })
+
+          // Reuse a live session if present.
+          if (job.planningSessionId && this.sessionManager.getSessionMeta(job.planningSessionId)) {
+            const meta = this.sessionManager.getSessionMeta(job.planningSessionId)!
+            return this.json(res, 200, { sessionId: job.planningSessionId, projectId: job.planningProjectId, reused: true, cwd: meta.cwd }, req)
+          }
+
+          const projects = getProjects()
+          let project = projects.find((p) => p.name.toLowerCase() === job.project.toLowerCase())
+          if (!project) project = addProject(job.project)
+
+          const label = computeSessionLabel(project.id)
+          const session = addSession(project.id, { name: `Plan: ${job.name}`.slice(0, 60), cwd: '~', label })
+
+          const wt = createWorktree(project.name, getInbox().date, session.id)
+          let cwd: string
+          if (wt) {
+            cwd = wt.path
+          } else {
+            cwd = path.join(os.tmpdir(), 'sm-plan', session.id)
+            fs.mkdirSync(cwd, { recursive: true })
+          }
+          updateSessionFields(project.id, session.id, { cwd, worktree: wt ?? undefined })
+
+          try {
+            fs.writeFileSync(path.join(cwd, 'CONTEXT.md'), this.buildJobContextMd({ ...job, guidelines: typeof guidelines === 'string' ? guidelines : job.guidelines }))
+          } catch (e) { console.error('[triage/jobs/plan] CONTEXT.md write failed:', (e as Error)?.message) }
+
+          const seed = 'Read ./CONTEXT.md — it describes a backlog job with several tickets to plan together. ' +
+            'Explore the relevant code, discuss with me, and help refine a single clear implementation ' +
+            'plan covering all of them. Do not write code yet; when we agree, I will ask you to save the plan to PLAN.md.'
+          const command = `claude --dangerously-skip-permissions "${seed}"`
+
+          let ptyOk = true
+          try {
+            this.sessionManager.createSession({
+              id: session.id, name: session.name, cwd, command,
+              projectId: project.id, projectName: project.name, label, status: 'running',
+            })
+          } catch (e) {
+            ptyOk = false
+            console.error('[triage/jobs/plan] PTY spawn failed:', (e as Error)?.message)
+          }
+
+          updateJob(jid, { planningSessionId: session.id, planningProjectId: project.id })
+          this.pushSse('session-created', { projectId: project.id, session })
+          return this.json(res, 200, {
+            sessionId: session.id, projectId: project.id, sessionLabel: label,
+            ptyOk, cwd, branch: wt ? wt.branch : null,
+          }, req)
+        } catch (e) {
+          console.error('[triage/jobs/plan]', e)
+          this.json(res, 500, { error: String((e as Error)?.message || e) }, req)
+        }
+      })
+      return
+    }
+
+    // GET /api/triage/jobs/:jid/plan/file?name=PLAN.md — pull a file the job's
+    // planning session wrote into its worktree.
+    const jobPlanFileMatch = urlPath.match(/^\/api\/triage\/jobs\/([^/]+)\/plan\/file$/)
+    if (req.method === 'GET' && jobPlanFileMatch) {
+      const job = getJob(jobPlanFileMatch[1])
+      if (!job?.planningSessionId) return this.json(res, 404, { error: 'No planning session' }, req)
+      const project = getProjects().find((p) => p.id === job.planningProjectId)
+      const session = project?.sessions.find((s) => s.id === job.planningSessionId)
+      const dir = session?.worktree?.path
+        || (session?.cwd?.startsWith('~') ? path.join(os.homedir(), session.cwd.slice(1)) : session?.cwd)
+        || os.homedir()
+      const name = path.basename(url.searchParams.get('name') || 'PLAN.md')
+      try {
+        const content = fs.readFileSync(path.join(dir, name), 'utf-8')
+        return this.json(res, 200, { name, content }, req)
+      } catch {
+        return this.json(res, 404, { error: `${name} not found yet` }, req)
+      }
+    }
+
     // POST /api/triage/dispatch — build feedback items and/or backlog jobs:
     // each becomes a Job (session in a worktree) with its tasks queued + played.
     if (req.method === 'POST' && urlPath === '/api/triage/dispatch') {
@@ -984,6 +1145,10 @@ export class HttpApiServer {
           }
           const resolveProject = (name: string) => projects.find((p) => p.name.toLowerCase() === name.toLowerCase()) || addProject(name)
 
+          // Items planned together share one session: only the first runs the plan;
+          // the rest just attach to that same execute task.
+          const handledPlanning = new Map<string, string>() // planningSessionId -> taskId
+
           // --- Feedback items ---
           for (const id of itemIds) {
             const item = getItem(id)
@@ -995,12 +1160,19 @@ export class HttpApiServer {
             if (item.planningSessionId && item.planningProjectId && this.sessionManager.getSessionMeta(item.planningSessionId)) {
               const project = projects.find((p) => p.id === item.planningProjectId)
               if (project) {
+                // A sibling already queued the execute task for this shared session.
+                const priorTaskId = handledPlanning.get(item.planningSessionId)
+                if (priorTaskId) {
+                  updateItem(id, { triageStatus: 'dispatched', dispatchedProjectId: project.id, dispatchedTaskId: priorTaskId, dispatchedAt: new Date().toISOString() })
+                  continue
+                }
                 const session = project.sessions.find((s) => s.id === item.planningSessionId)
                 const size = item.size ?? item.suggestedSize
                 const task = addTask(project.id, { title: `[${size.toUpperCase()}] ${item.title} — execute plan`, description: (item.enrichedSpec || item.body).trim(), status: 'backlog' })
                 updateTask(project.id, task.id, { assignedSessionId: item.planningSessionId, command: 'Implement the plan in PLAN.md now. Make all the necessary code changes in this repo, then stop.' })
                 updateItem(id, { triageStatus: 'dispatched', dispatchedProjectId: project.id, dispatchedTaskId: task.id, dispatchedAt: new Date().toISOString() })
                 this.startQueue(project.id, item.planningSessionId)
+                handledPlanning.set(item.planningSessionId, task.id)
                 jobs.push({ projectId: project.id, projectName: project.name, sessionId: item.planningSessionId, sessionLabel: session?.label, taskIds: [task.id], ptyOk: true, playing: true, worktree: session?.worktree?.path ?? null, branch: session?.worktree?.branch ?? null, reusedPlanning: true })
                 continue
               }
@@ -1036,6 +1208,22 @@ export class HttpApiServer {
             if (!bj) { skipped.push({ id: jid, error: 'job not found' }); continue }
             if (bj.status === 'dispatched') { skipped.push({ id: jid, error: 'already dispatched' }); continue }
             if (!bj.tickets.length) { skipped.push({ id: jid, error: 'no tickets' }); continue }
+
+            // If planned in a live Claude session, execute the plan in that warm
+            // session/worktree (one execute task) instead of a fresh boot.
+            if (bj.planningSessionId && bj.planningProjectId && this.sessionManager.getSessionMeta(bj.planningSessionId)) {
+              const project = projects.find((p) => p.id === bj.planningProjectId)
+              if (project) {
+                const session = project.sessions.find((s) => s.id === bj.planningSessionId)
+                const task = addTask(project.id, { title: `${bj.name} — execute plan`, description: (bj.enrichedSpec || `Backlog job "${bj.name}".`).trim(), status: 'backlog' })
+                updateTask(project.id, task.id, { assignedSessionId: bj.planningSessionId, command: 'Implement the plan in PLAN.md now. Make all the necessary code changes in this repo, then stop.' })
+                updateJob(jid, { status: 'dispatched', dispatchedProjectId: project.id, dispatchedSessionId: bj.planningSessionId, dispatchedAt: new Date().toISOString() })
+                this.startQueue(project.id, bj.planningSessionId)
+                jobs.push({ projectId: project.id, projectName: project.name, sessionId: bj.planningSessionId, sessionLabel: session?.label, taskIds: [task.id], ptyOk: true, playing: true, worktree: session?.worktree?.path ?? null, branch: session?.worktree?.branch ?? null, reusedPlanning: true, backlogJobId: jid })
+                continue
+              }
+            }
+
             let project = projects.find((p) => p.name.toLowerCase() === bj.project.toLowerCase())
             if (!project) project = addProject(bj.project)
             const tasks = bj.tickets.map((t) => ({ title: `[${t.size.toUpperCase()}] ${t.title}`, description: `From backlog job "${bj.name}".` }))
@@ -1079,6 +1267,56 @@ export class HttpApiServer {
       ``,
       `## Your job`,
       `Help me arrive at a clear, buildable implementation plan. Explore the code first, ask questions, and propose an approach. Save the final plan to PLAN.md only when I ask.`,
+      ``,
+    ].join('\n')
+  }
+
+  // CONTEXT.md for a category-wide planning session: every ticket in one brief,
+  // planned together into a single PLAN.md.
+  private buildGroupContextMd(items: FeedbackItem[]): string {
+    const head = [
+      `# ${items.length} related tasks to plan together`,
+      ``,
+      `Plan a single coherent implementation covering all of the tickets below. They may touch different areas — group the work sensibly into one plan.`,
+      ``,
+    ]
+    const blocks = items.map((item, i) => {
+      const size = item.size ?? item.suggestedSize
+      return [
+        `## ${i + 1}. ${item.title}`,
+        `- **Target project:** ${item.targetProject}`,
+        `- **Type:** ${item.type} · **Size:** ${size} · **Severity:** ${item.signals.severity}`,
+        `- **Source:** ${item.source} · ${item.sourceDetail}${item.votes != null ? ` · ${item.votes} votes` : ''}`,
+        ``,
+        item.body,
+        ...(item.guidelines?.trim() ? [``, `**Guidelines:** ${item.guidelines.trim()}`] : []),
+        ``,
+      ].join('\n')
+    })
+    const tail = [
+      `## Your job`,
+      `Help me arrive at one clear, buildable plan for all the tickets above. Explore the code first, ask questions, and propose an approach. Save the final plan to PLAN.md only when I ask.`,
+      ``,
+    ]
+    return [...head, ...blocks, ...tail].join('\n')
+  }
+
+  // CONTEXT.md for a backlog-job planning session: the job's tickets, planned
+  // together into a single PLAN.md.
+  private buildJobContextMd(job: { name: string; project: string; tickets: Array<{ title: string; size: string }>; guidelines?: string }): string {
+    return [
+      `# Backlog job: ${job.name}`,
+      ``,
+      `- **Target project:** ${job.project}`,
+      ``,
+      `Plan a single coherent implementation covering all of the tickets below.`,
+      ``,
+      `## Tickets`,
+      ...job.tickets.map((t, i) => `${i + 1}. [${t.size}] ${t.title}`),
+      ...(job.guidelines?.trim() ? [``, `## My guidelines / constraints`, job.guidelines.trim()] : []),
+      ``,
+      `## Your job`,
+      `Help me arrive at one clear, buildable plan for all the tickets above. Explore the code first, ask questions, and propose an approach. Save the final plan to PLAN.md only when I ask.`,
       ``,
     ].join('\n')
   }
