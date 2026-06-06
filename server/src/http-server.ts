@@ -287,7 +287,12 @@ export class HttpApiServer {
 
   private authenticate(req: http.IncomingMessage): boolean {
     const auth = req.headers['authorization']
-    return auth?.startsWith('Bearer ') === true && auth.slice(7) === this.token
+    if (auth?.startsWith('Bearer ') && auth.slice(7) === this.token) return true
+    // EventSource (SSE) can't set headers, so the web app passes the token in
+    // the query string: /api/events?token=… — accept that too.
+    const url = new URL(req.url || '/', `https://localhost:${this.port}`)
+    if (url.searchParams.get('token') === this.token) return true
+    return false
   }
 
   private getClientIp(req: http.IncomingMessage): string {
