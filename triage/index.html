@@ -243,9 +243,14 @@
 <script>
 // ---- transport ----
 const BASE = localStorage.getItem('sm_base') || '';
+// Reuse the SessionManager web app's token (same origin) so you only set it once.
+function smConfigToken() {
+  try { return (JSON.parse(localStorage.getItem('sessionmanager_config') || '{}').token) || ''; }
+  catch { return ''; }
+}
 const _qtoken = new URLSearchParams(location.search).get('token');
 if (_qtoken) localStorage.setItem('sm_token', _qtoken);
-let TOKEN = _qtoken || localStorage.getItem('sm_token') || '';
+let TOKEN = _qtoken || localStorage.getItem('sm_token') || smConfigToken() || '';
 function authHeaders(extra) { return Object.assign({ Authorization: 'Bearer ' + TOKEN }, extra || {}); }
 async function api(path, opts) {
   opts = opts || {}; opts.headers = authHeaders(opts.headers);
