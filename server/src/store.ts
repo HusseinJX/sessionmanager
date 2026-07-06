@@ -37,6 +37,9 @@ export interface SessionConfig {
   worktree?: WorktreeMeta
   prUrl?: string
   prNote?: string
+  // Set for a Contributor Mode session: a restricted, tool-limited Claude a
+  // teammate drives by natural language without ever getting repo/code access.
+  contributor?: boolean
 }
 
 export interface ProjectConfig {
@@ -238,7 +241,7 @@ export function updateTask(
 export function updateSessionFields(
   projectId: string,
   sessionId: string,
-  updates: Partial<Pick<SessionConfig, 'worktree' | 'prUrl' | 'prNote' | 'cwd'>>
+  updates: Partial<Pick<SessionConfig, 'worktree' | 'prUrl' | 'prNote' | 'cwd' | 'contributor'>>
 ): SessionConfig | null {
   const project = store().projects.find((p) => p.id === projectId)
   const session = project?.sessions.find((s) => s.id === sessionId)

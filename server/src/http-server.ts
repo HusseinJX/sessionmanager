@@ -5,7 +5,7 @@ import * as path from 'path'
 import * as os from 'os'
 import type { SessionManager } from './session-manager'
 import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, updateSessionName, setSessionQueueRunning, updateSessionFields } from './store'
-import type { ProjectConfig } from './store'
+import type { ProjectConfig, SessionConfig } from './store'
 import { getInbox, getItem, updateItem, resetInbox, getJob, addJob, updateJob, removeJob, addTicket, updateTicket, removeTicket, type FeedbackItem } from './triage-store'
 import { createWorktree, finalizeJobPr, cleanupWorktree } from './worktree'
 
@@ -61,16 +61,19 @@ export class HttpApiServer {
   private clientIdCounter = 0
   private sessionManager: SessionManager
   private token: string
+  private contributorToken: string
   private port: number
   private tlsOptions: TlsOptions
   private rateLimitMap = new Map<string, RateLimitEntry>()
   private readonly RATE_LIMIT = 600       // requests per window
   private readonly RATE_WINDOW_MS = 60000 // 1 minute
 
-  constructor(sessionManager: SessionManager, port: number, token: string, tlsOptions: TlsOptions) {
+  constructor(sessionManager: SessionManager, port: number, token: string, tlsOptions: TlsOptions, contributorToken = '') {
     this.sessionManager = sessionManager
     this.port = port
     this.token = token
+    // A separate, lower-privilege token for Contributor Mode. Empty = disabled.
+    this.contributorToken = contributorToken
     this.tlsOptions = tlsOptions
   }
 
@@ -285,14 +288,23 @@ export class HttpApiServer {
     })
   }
 
-  private authenticate(req: http.IncomingMessage): boolean {
+  // Resolve the caller's role from the bearer token (or ?token= for SSE/pages
+  // that can't set headers). 'admin' = full API; 'contributor' = the restricted
+  // /api/contributor/* namespace only; null = unauthenticated.
+  private authRole(req: http.IncomingMessage): 'admin' | 'contributor' | null {
     const auth = req.headers['authorization']
-    if (auth?.startsWith('Bearer ') && auth.slice(7) === this.token) return true
-    // EventSource (SSE) can't set headers, so the web app passes the token in
-    // the query string: /api/events?token=… — accept that too.
+    const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined
     const url = new URL(req.url || '/', `https://localhost:${this.port}`)
-    if (url.searchParams.get('token') === this.token) return true
-    return false
+    const qs = url.searchParams.get('token') || undefined
+    const presented = bearer ?? qs
+    if (!presented) return null
+    if (presented === this.token) return 'admin'
+    if (this.contributorToken && presented === this.contributorToken) return 'contributor'
+    return null
+  }
+
+  private authenticate(req: http.IncomingMessage): boolean {
+    return this.authRole(req) === 'admin'
   }
 
   private getClientIp(req: http.IncomingMessage): string {
@@ -370,10 +382,27 @@ export class HttpApiServer {
     const url = new URL(req.url || '/', `https://localhost:${this.port}`)
     const urlPath = url.pathname
 
-    // Only require auth for /api/ routes
-    if (urlPath.startsWith('/api/') && !this.authenticate(req)) {
-      this.json(res, 401, { error: 'Unauthorized' })
-      return
+    // Only require auth for /api/ routes.
+    if (urlPath.startsWith('/api/')) {
+      const role = this.authRole(req)
+      if (!role) {
+        this.json(res, 401, { error: 'Unauthorized' })
+        return
+      }
+      // Contributor Mode: the low-privilege token may ONLY reach the restricted
+      // /api/contributor/* namespace (which itself only ever touches the single
+      // tagged contributor session). Admin creating/destroying that session and
+      // everything else stays admin-only.
+      if (role === 'contributor') {
+        const contributorOk =
+          urlPath.startsWith('/api/contributor/') &&
+          !(req.method === 'POST' && urlPath === '/api/contributor/session') &&
+          !(req.method === 'DELETE' && urlPath === '/api/contributor/session')
+        if (!contributorOk) {
+          this.json(res, 403, { error: 'Forbidden' })
+          return
+        }
+      }
     }
 
     // Rate limit API requests
@@ -1242,6 +1271,104 @@ export class HttpApiServer {
       return
     }
 
+    // ===== Contributor Mode =====
+    // A trusted teammate drives a restricted Claude by natural language and
+    // contributes working code WITHOUT ever getting the repo, a shell, or an
+    // egress channel. Admin (SM_TOKEN) creates/destroys the session; the
+    // contributor token can only reach this namespace, which itself only ever
+    // touches the single session tagged `contributor`. Hard walls: denied
+    // Bash+WebFetch (no shell, no exfil), isolated worktree (one branch only),
+    // no direct push (review lands via Submit → PR). The output filter is a
+    // best-effort convenience, NOT a security boundary.
+
+    // POST /api/contributor/session (admin) — create/replace the contributor session
+    if (req.method === 'POST' && urlPath === '/api/contributor/session') {
+      this.readBody(req).then((body) => {
+        try {
+          const { project: projectName } = JSON.parse(body || '{}') as { project?: string }
+          if (!projectName || typeof projectName !== 'string') return this.json(res, 400, { error: 'project required' }, req)
+          const created = this.createContributorSession(projectName)
+          return this.json(res, 201, created, req)
+        } catch (e) {
+          return this.json(res, 500, { error: String((e as Error)?.message || e) }, req)
+        }
+      })
+      return
+    }
+
+    // DELETE /api/contributor/session (admin) — tear down + prune worktree
+    if (req.method === 'DELETE' && urlPath === '/api/contributor/session') {
+      const existing = this.getContributorSession()
+      if (existing) {
+        this.sessionManager.destroySession(existing.session.id)
+        if (existing.session.worktree) cleanupWorktree(existing.session.worktree)
+        removeSession(existing.project.id, existing.session.id)
+      }
+      return this.json(res, 200, { ok: true }, req)
+    }
+
+    // GET /api/contributor/session — minimal, non-leaky status for the chat UI
+    if (req.method === 'GET' && urlPath === '/api/contributor/session') {
+      const existing = this.getContributorSession()
+      if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
+      const live = this.sessionManager.getSessionMeta(existing.session.id)
+      return this.json(res, 200, {
+        id: existing.session.id,
+        name: existing.session.name,
+        project: existing.project.name,
+        branch: existing.session.worktree?.branch ?? null,
+        status: live?.status ?? 'exited',
+        prUrl: existing.session.prUrl ?? null,
+        prNote: existing.session.prNote ?? null,
+      }, req)
+    }
+
+    // POST /api/contributor/input — {data}. Always and only the contributor session.
+    if (req.method === 'POST' && urlPath === '/api/contributor/input') {
+      this.readBody(req).then((body) => {
+        try {
+          const { data } = JSON.parse(body || '{}') as { data?: string }
+          if (typeof data !== 'string') return this.json(res, 400, { error: 'data required' }, req)
+          const existing = this.getContributorSession()
+          if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
+          const ok = this.sessionManager.writeToSession(existing.session.id, data)
+          return this.json(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'Session not running' }, req)
+        } catch {
+          return this.json(res, 400, { error: 'Invalid JSON' }, req)
+        }
+      })
+      return
+    }
+
+    // GET /api/contributor/history — FILTERED prose view of the session output.
+    if (req.method === 'GET' && urlPath === '/api/contributor/history') {
+      const existing = this.getContributorSession()
+      if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
+      const text = this.filterForContributor(this.sessionManager.getHistory(existing.session.id))
+      this.cors(res, req)
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end(text)
+      return
+    }
+
+    // POST /api/contributor/submit — commit the worktree, push, open a PR to review
+    if (req.method === 'POST' && urlPath === '/api/contributor/submit') {
+      const existing = this.getContributorSession()
+      if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
+      if (!existing.session.worktree) return this.json(res, 400, { error: 'No worktree to submit (SM_WORKTREES off or repo not on host)' }, req)
+      const title = `Contributor: ${existing.session.name}`
+      const pr = finalizeJobPr(existing.session.worktree, title, 'Submitted from Contributor Mode for review.')
+      updateSessionFields(existing.project.id, existing.session.id, { prUrl: pr.prUrl ?? undefined, prNote: pr.note })
+      this.pushSse('job-pr', { sessionId: existing.session.id, projectName: existing.project.name, branch: pr.branch, prUrl: pr.prUrl, note: pr.note })
+      return this.json(res, 200, pr, req)
+    }
+
+    // GET /contributor — serve the standalone Contributor chat UI
+    if (req.method === 'GET' && (urlPath === '/contributor' || urlPath === '/contributor/')) {
+      this.serveContributorUi(res)
+      return
+    }
+
     // GET /triage — serve the standalone Morning Triage UI
     if (req.method === 'GET' && (urlPath === '/triage' || urlPath === '/triage/')) {
       this.serveTriageUi(res)
@@ -1319,6 +1446,142 @@ export class HttpApiServer {
       `Help me arrive at one clear, buildable plan for all the tickets above. Explore the code first, ask questions, and propose an approach. Save the final plan to PLAN.md only when I ask.`,
       ``,
     ].join('\n')
+  }
+
+  // ===== Contributor Mode helpers =====
+
+  // Find the single session tagged as the contributor session, if any.
+  private getContributorSession(): { project: ProjectConfig; session: SessionConfig } | null {
+    for (const project of getProjects()) {
+      const session = project.sessions.find((s) => s.contributor)
+      if (session) return { project, session }
+    }
+    return null
+  }
+
+  // The restricted Claude invocation. acceptEdits auto-applies file edits (no
+  // hanging prompts in a headless PTY); Bash+WebFetch are hard-denied (deny
+  // outranks allow), so the collaborator has no shell and no arbitrary-host
+  // socket. That's the actual control: they read/edit code through Claude and
+  // contribute, but have no convenient way to bulk-download the repo (no
+  // clone/tar/scp) and can't push — work lands only via Submit → PR. WebSearch
+  // still works (it runs server-side via the Anthropic API).
+  private buildContributorCommand(): string {
+    const sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'"
+    const sys = [
+      'You are pair-building with a product collaborator who works entirely through you.',
+      'They describe changes in plain language; explore the code, discuss, and implement directly in this repository.',
+      'Explain your work clearly — showing relevant code and diffs is fine and encouraged.',
+      'You have no shell and no web-fetch, so do not try to run commands, clone, or move data off this machine; work within the files.',
+      'When they are satisfied, tell them to click "Submit for review" — a human reviews the changes and merges the PR.',
+    ].join(' ')
+    const seed = 'A product collaborator will describe changes for this project. ' +
+      'Greet them in one line, ask what they want to build or change, and implement it once they confirm.'
+    return [
+      'claude',
+      '--permission-mode', 'acceptEdits',
+      '--disallowedTools', '"Bash WebFetch"',
+      '--allowedTools', '"Read Edit Write Grep Glob WebSearch TodoWrite"',
+      '--append-system-prompt', sq(sys),
+      sq(seed),
+    ].join(' ')
+  }
+
+  // Create (replacing any prior) the one-at-a-time contributor session: its own
+  // git worktree + branch, a deny-list settings file, and the restricted Claude.
+  private createContributorSession(projectName: string): {
+    id: string; name: string; project: string; branch: string | null; ptyOk: boolean
+  } {
+    const prev = this.getContributorSession()
+    if (prev) {
+      this.sessionManager.destroySession(prev.session.id)
+      if (prev.session.worktree) cleanupWorktree(prev.session.worktree)
+      removeSession(prev.project.id, prev.session.id)
+    }
+
+    const projects = getProjects()
+    let project = projects.find((p) => p.name.toLowerCase() === projectName.toLowerCase())
+    if (!project) project = addProject(projectName)
+
+    const label = computeSessionLabel(project.id)
+    const name = `Contributor: ${project.name}`
+    const session = addSession(project.id, { name, cwd: '~', label, contributor: true })
+
+    const date = new Date().toISOString().slice(0, 10)
+    const wt = createWorktree(project.name, date, session.id, 'contributor')
+    let cwd: string
+    if (wt) {
+      cwd = wt.path
+    } else {
+      cwd = path.join(os.tmpdir(), 'sm-contributor', session.id)
+      fs.mkdirSync(cwd, { recursive: true })
+    }
+    updateSessionFields(project.id, session.id, { cwd, worktree: wt ?? undefined, contributor: true })
+
+    // Defense in depth: a deny-list settings file in the worktree, so Bash and
+    // WebFetch stay blocked even if the CLI flags are ever changed.
+    try {
+      const claudeDir = path.join(cwd, '.claude')
+      fs.mkdirSync(claudeDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(claudeDir, 'settings.local.json'),
+        JSON.stringify({ permissions: { deny: ['Bash', 'WebFetch'] } }, null, 2)
+      )
+    } catch (e) { console.error('[contributor] settings write failed:', (e as Error)?.message) }
+
+    let ptyOk = true
+    try {
+      this.sessionManager.createSession({
+        id: session.id, name, cwd, command: this.buildContributorCommand(),
+        projectId: project.id, projectName: project.name, label, status: 'running',
+      })
+    } catch (e) {
+      ptyOk = false
+      console.error('[contributor] PTY spawn failed:', (e as Error)?.message)
+    }
+    this.pushSse('session-created', { projectId: project.id, session })
+    return { id: session.id, name, project: project.name, branch: wt ? wt.branch : null, ptyOk }
+  }
+
+  // Readability pass on the raw PTY stream for the contributor's chat view. NOT
+  // a redaction layer — code and diffs are meant to be visible (the goal is only
+  // to prevent convenient bulk-download of the repo, which the denied tools +
+  // worktree + no-push already handle). This just strips terminal control noise
+  // and TUI box-drawing so Claude's output reads cleanly in a plain pane.
+  private filterForContributor(raw: string): string {
+    let s = raw
+    s = s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')            // CSI sequences
+    s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')     // OSC sequences
+    s = s.replace(/\x1b[()][AB012]/g, '')                       // charset selects
+    s = s.replace(/\r/g, '')
+    s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')          // stray control bytes
+    const BOX = '│┃╭╮╰╯┌┐└┘├┤┬┴┼▔▁█▏▕▐░▒▓'
+    s = s.replace(new RegExp('[' + BOX + ']', 'g'), '')
+    const out: string[] = []
+    let blank = false
+    for (const rawLine of s.split('\n')) {
+      const line = rawLine.replace(/[ \t]+$/, '')
+      if (!line.trim()) { if (blank) continue; blank = true } else blank = false
+      out.push(line)
+    }
+    return out.join('\n').trim()
+  }
+
+  private serveContributorUi(res: http.ServerResponse): void {
+    const candidates = [
+      path.join(__dirname, '../../contributor/index.html'),
+      path.join(__dirname, '../contributor/index.html'),
+      path.join(process.cwd(), 'contributor/index.html'),
+      path.join(process.cwd(), '../contributor/index.html'),
+    ]
+    for (const f of candidates) {
+      if (fs.existsSync(f)) {
+        res.writeHead(200, { 'Content-Type': 'text/html' })
+        res.end(fs.readFileSync(f))
+        return
+      }
+    }
+    this.json(res, 404, { error: 'Contributor UI not found' })
   }
 
   private serveTriageUi(res: http.ServerResponse): void {

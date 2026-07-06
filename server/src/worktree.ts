@@ -51,7 +51,7 @@ export function worktreesEnabled(): boolean {
   return !/^(0|off|false|no)$/i.test(process.env.SM_WORKTREES || '')
 }
 
-export function createWorktree(projectName: string, date: string, sessionId: string): WorktreeInfo | null {
+export function createWorktree(projectName: string, date: string, sessionId: string, branchPrefix = 'triage'): WorktreeInfo | null {
   if (!worktreesEnabled()) return null // kill switch (SM_WORKTREES=off)
   const repoPath = resolveRepoPath(projectName)
   if (!repoPath) return null
@@ -59,7 +59,7 @@ export function createWorktree(projectName: string, date: string, sessionId: str
   let baseBranch = 'main'
   try { baseBranch = git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD']) || 'main' } catch { /* keep default */ }
 
-  const branch = `triage/${date}/${slug(projectName)}-${sessionId.slice(0, 8)}`
+  const branch = `${branchPrefix}/${date}/${slug(projectName)}-${sessionId.slice(0, 8)}`
   const dest = path.join(WORKTREES_DIR, sessionId)
 
   try {

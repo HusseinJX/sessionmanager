@@ -7,3 +7,8 @@ certs/
 *.key
 *.crt
 *.pem
+.gstack/
+.DS_Store
+server/.env
+server/data.json
+server/feedback-inbox.json

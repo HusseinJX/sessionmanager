@@ -30,6 +30,8 @@ function ensureTlsCerts(): TlsOptions {
 const tlsOptions = ensureTlsCerts()
 const port = parseInt(process.env.PORT || String(getServerPort()), 10)
 const token = process.env.SM_TOKEN || getServerToken()
+// Contributor Mode: a separate, lower-privilege token. Unset = feature disabled.
+const contributorToken = process.env.SM_CONTRIBUTOR_TOKEN || ''
 
 console.log('=== Session Manager Server (HTTPS) ===')
 console.log(`Port:  ${port}`)
@@ -58,11 +60,12 @@ for (const [projectIdx, project] of projects.entries()) {
   }
 }
 
-const server = new HttpApiServer(sessionManager, port, token, tlsOptions)
+const server = new HttpApiServer(sessionManager, port, token, tlsOptions, contributorToken)
 server.start().then(() => {
   console.log(`\nServer listening on https://0.0.0.0:${port}`)
   console.log(`Web UI: https://localhost:${port}`)
   console.log(`\nUse token above to authenticate.`)
+  if (contributorToken) console.log(`Contributor Mode enabled: https://localhost:${port}/contributor?token=<SM_CONTRIBUTOR_TOKEN>`)
 })
 
 // Start Telegram bot if configured
