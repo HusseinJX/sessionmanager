@@ -28,6 +28,30 @@ function computeRunnerLabel(projectId: string, parentSessionId: string): string 
   return `${parentLabel}-R${runnerCount}`
 }
 
+// PreToolUse hook (written into each contributor worktree) that blocks any file
+// tool whose target path resolves outside the worktree — so the contributor
+// can't have Claude read/write /root, /etc, the server's data.json, etc. Exit 2
+// = deny (Claude Code treats stderr as the block reason).
+const CONTRIBUTOR_ESCAPE_HOOK = `#!/usr/bin/env python3
+import sys, json, os
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+ti = data.get('tool_input', {}) or {}
+root = os.path.realpath(os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd())
+for k in ('file_path', 'path', 'notebook_path'):
+    v = ti.get(k)
+    if not isinstance(v, str) or not v:
+        continue
+    ap = v if os.path.isabs(v) else os.path.join(root, v)
+    rp = os.path.realpath(ap)
+    if rp != root and not rp.startswith(root + os.sep):
+        sys.stderr.write("Blocked: '%s' is outside this project. You can only read or edit files in this repo." % v)
+        sys.exit(2)
+sys.exit(0)
+`
+
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -1586,14 +1610,28 @@ export class HttpApiServer {
     }
     updateSessionFields(project.id, session.id, { cwd, worktree: wt ?? undefined, contributor: true })
 
-    // Defense in depth: a deny-list settings file in the worktree, so Bash and
-    // WebFetch stay blocked even if the CLI flags are ever changed.
+    // Worktree guardrails written before Claude boots:
+    //  - deny Bash + WebFetch (belt to the CLI flags' suspenders), and
+    //  - a PreToolUse hook that HARD-BLOCKS any file tool whose path escapes the
+    //    worktree. Without this, allow-listing Read/Edit/Write lets the
+    //    contributor ask Claude to read /root/.config/gh (GitHub token) or the
+    //    server data.json (admin token), or write outside the repo. The hook's
+    //    deny can't be overridden by the mode or approved by the contributor.
     try {
       const claudeDir = path.join(cwd, '.claude')
       fs.mkdirSync(claudeDir, { recursive: true })
+      fs.writeFileSync(path.join(claudeDir, 'deny-escape.py'), CONTRIBUTOR_ESCAPE_HOOK)
       fs.writeFileSync(
         path.join(claudeDir, 'settings.local.json'),
-        JSON.stringify({ permissions: { deny: ['Bash', 'WebFetch'] } }, null, 2)
+        JSON.stringify({
+          permissions: { deny: ['Bash', 'WebFetch'] },
+          hooks: {
+            PreToolUse: [{
+              matcher: 'Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob',
+              hooks: [{ type: 'command', command: 'python3 "$CLAUDE_PROJECT_DIR/.claude/deny-escape.py"' }],
+            }],
+          },
+        }, null, 2)
       )
     } catch (e) { console.error('[contributor] settings write failed:', (e as Error)?.message) }
 
