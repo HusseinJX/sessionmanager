@@ -1414,7 +1414,7 @@ export class HttpApiServer {
       const existing = this.getContributorSession()
       if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
       if (!existing.session.worktree) return this.json(res, 400, { error: 'No worktree to submit (SM_WORKTREES off or repo not on host)' }, req)
-      const title = `Contributor: ${existing.session.name}`
+      const title = existing.session.name   // already "Contributor: <project>"
       const pr = finalizeJobPr(existing.session.worktree, title, 'Submitted from Contributor Mode for review.')
       updateSessionFields(existing.project.id, existing.session.id, { prUrl: pr.prUrl ?? undefined, prNote: pr.note })
       this.pushSse('job-pr', { sessionId: existing.session.id, projectName: existing.project.name, branch: pr.branch, prUrl: pr.prUrl, note: pr.note })
