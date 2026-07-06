@@ -59,8 +59,12 @@
       <div class="url" id="link"></div>
       <button class="copy" id="copyBtn">Copy link</button>
     </div>
+    <div class="pr" id="bind"></div>
     <div class="pr" id="pr"></div>
-    <div class="row"><button class="stop" id="stopBtn">End session</button></div>
+    <div class="row">
+      <button class="stop" id="stopBtn">End session</button>
+      <button id="rebindBtn" title="Let a different computer claim the link (e.g. they switched laptops) and reset the expiry">Reset device lock</button>
+    </div>
   </div>
 
   <div class="err" id="err"></div>
@@ -77,6 +81,16 @@
   var projectEl=document.getElementById('project'), startBtn=document.getElementById('startBtn');
   var stopBtn=document.getElementById('stopBtn'), linkEl=document.getElementById('link');
   var copyBtn=document.getElementById('copyBtn'), prEl=document.getElementById('pr'), errEl=document.getElementById('err');
+  var bindEl=document.getElementById('bind'), rebindBtn=document.getElementById('rebindBtn');
+
+  function fmtLeft(ms){ if(ms<=0) return 'expired'; var h=Math.floor(ms/3600000), d=Math.floor(h/24); return d>0 ? (d+'d '+(h%24)+'h') : (h+'h '+Math.floor((ms%3600000)/60000)+'m'); }
+  function renderBinding(b){
+    if(!b){ bindEl.textContent=''; return; }
+    if(!b.claimed){ bindEl.textContent='🔓 Device: not claimed yet — the first computer to open the link locks it (valid '+b.ttlDays+' days).'; return; }
+    if(b.expired){ bindEl.textContent='⏰ Link expired — End + Start a new session, or Reset device lock.'; return; }
+    var left = b.expiresAt ? ' · expires in '+fmtLeft(b.expiresAt-Date.now()) : '';
+    bindEl.textContent='🔒 Device: locked to first computer'+(b.boundIp?(' ('+b.boundIp+')'):'')+left;
+  }
 
   function hdr(x){ return Object.assign({ 'Authorization':'Bearer '+token }, x||{}); }
   function api(p,o){ o=o||{}; o.headers=hdr(o.headers); return fetch('/api/contributor'+p, o); }
@@ -89,6 +103,7 @@
     dot.className='dot '+(s.status==='running'?'live':'dead');
     statusText.textContent=(s.status==='running'?'Live':'Ended')+' · '+s.project;
     if(s.contributorUrl){ linkEl.textContent=s.contributorUrl; }
+    renderBinding(s.binding);
     if(s.prUrl) prEl.innerHTML='Latest submit → <a href="'+s.prUrl+'" target="_blank" rel="noopener">pull request</a>';
     else if(s.prNote) prEl.textContent='Latest submit: '+s.prNote; else prEl.textContent='';
   }
@@ -115,6 +130,13 @@
     stopBtn.disabled=true;
     api('/session',{ method:'DELETE' }).then(function(){ refresh(); }).catch(function(e){ err(e.message); })
       .finally(function(){ stopBtn.disabled=false; });
+  });
+
+  rebindBtn.addEventListener('click', function(){
+    if(!confirm('Reset the device lock? The next computer to open the link claims it, and the expiry clock restarts. Use this if your teammate switched machines.')) return;
+    rebindBtn.disabled=true;
+    api('/rebind',{ method:'POST' }).then(function(){ refresh(); }).catch(function(e){ err(e.message); })
+      .finally(function(){ rebindBtn.disabled=false; });
   });
 
   copyBtn.addEventListener('click', function(){

@@ -134,7 +134,12 @@
   function pollSession() {
     api('/session').then(function (r) {
       if (r.status === 404) { haveSession = false; setLive(false, 'no session yet'); return null; }
-      if (r.status === 401 || r.status === 403) { setLive(false, 'unauthorized'); return null; }
+      if (r.status === 401 || r.status === 403) {
+        haveSession = false;
+        r.json().then(function (j) { setLive(false, 'locked'); if (term) { emptyEl.style.display = 'block'; emptyEl.textContent = (j && j.error) || 'Access ended.'; } })
+          .catch(function () { setLive(false, 'unauthorized'); });
+        return null;
+      }
       return r.json();
     }).then(function (s) {
       if (!s) return;
@@ -179,8 +184,28 @@
       .finally(function () { submitBtn.disabled = false; });
   });
 
+  // Device claim: the first computer to open the link binds it (httpOnly cookie);
+  // others are locked out, and it expires after a couple days. Keep retrying the
+  // claim until the link is armed (John started the session), then run normally.
+  var claimed = false, claimTimer = null;
+  function afterClaim() {
+    claimed = true; emptyEl.textContent = 'Waiting for a session to be started for you…';
+    pollSession(); pumpHistory();
+    setInterval(pollSession, 3000); setInterval(pumpHistory, 800);
+  }
+  function tryClaim() {
+    api('/claim', { method: 'POST' }).then(function (r) {
+      if (r.ok) { if (!claimed) { clearInterval(claimTimer); afterClaim(); } return; }
+      return r.json().then(function (j) {
+        setLive(false, 'not available');
+        emptyEl.style.display = 'block';
+        emptyEl.textContent = (j && j.error) || 'This link is not available.';
+      });
+    }).catch(function () {});
+  }
+
   if (!token) { setLive(false, 'no token'); emptyEl.textContent = 'Missing access token. Ask John for your link.'; return; }
-  pollSession(); setInterval(pollSession, 3000); setInterval(pumpHistory, 800);
+  claimTimer = setInterval(tryClaim, 2500); tryClaim();
 })();
 </script>
 </body>

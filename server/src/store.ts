@@ -49,6 +49,16 @@ export interface ProjectConfig {
   tasks: TaskItem[]
 }
 
+// Device-binding + expiry state for the single contributor link. Armed when an
+// admin starts a session; bound to the first device that claims it; expires a
+// couple days after that first claim.
+export interface ContributorBinding {
+  armedAt?: number      // when an admin last armed the link (session start / rebind)
+  deviceHash?: string   // sha256 of the device cookie of the first claimer
+  boundAt?: number      // when that device claimed it (expiry clock starts here)
+  boundIp?: string      // informational: first claimer's IP
+}
+
 export interface StoreData {
   projects: ProjectConfig[]
   serverToken: string
@@ -56,6 +66,7 @@ export interface StoreData {
   telegramBotToken?: string
   telegramChatId?: string
   telegramNotificationsEnabled?: boolean
+  contributorBinding?: ContributorBinding
 }
 
 const STORE_PATH = path.join(process.env.SM_DATA_DIR || process.cwd(), 'data.json')
@@ -258,6 +269,15 @@ export function setSessionQueueRunning(projectId: string, sessionId: string, run
     session.queueRunning = running
     save()
   }
+}
+
+export function getContributorBinding(): ContributorBinding {
+  return store().contributorBinding || {}
+}
+
+export function setContributorBinding(b: ContributorBinding): void {
+  store().contributorBinding = b
+  save()
 }
 
 export function removeTask(projectId: string, taskId: string): void {

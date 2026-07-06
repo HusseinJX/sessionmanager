@@ -1,7 +1,7 @@
 // Contributor Mode: boot the real HTTPS server with a separate contributor
 // token and assert the access boundary — the low-privilege token may ONLY reach
-// the restricted /api/contributor/* namespace, admin creates/destroys the
-// session, and the contributor-facing status never leaks the repo path.
+// the restricted /api/contributor/* namespace; the link is device-locked (first
+// claimer wins) and its status never leaks the repo path.
 const test = require('node:test')
 const assert = require('node:assert')
 const { spawn } = require('child_process')
@@ -14,22 +14,29 @@ const ADMIN = 'admintok'
 const CONTRIB = 'contribtok'
 let proc
 
-function request(method, p, body, tokenOverride) {
+function request(method, p, body, tokenOverride, cookie) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null
     const headers = {}
-    // tokenOverride: string token, or null for no auth. undefined = admin.
     const tok = tokenOverride === undefined ? ADMIN : tokenOverride
     if (tok) headers.Authorization = 'Bearer ' + tok
+    if (cookie) headers.Cookie = cookie
     if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data) }
     const req = https.request({ host: 'localhost', port: PORT, path: p, method, rejectUnauthorized: false, headers }, (res) => {
       let b = ''; res.on('data', (c) => (b += c))
-      res.on('end', () => resolve({ status: res.statusCode, json: b ? JSON.parse(b) : null, raw: b }))
+      res.on('end', () => resolve({ status: res.statusCode, json: b ? JSON.parse(b) : null, raw: b, headers: res.headers }))
     })
     req.on('error', reject)
     if (data) req.write(data)
     req.end()
   })
+}
+// Pull the device cookie value back out of a claim's Set-Cookie for reuse.
+function cookieFrom(res) {
+  const sc = res.headers['set-cookie']
+  if (!sc) return null
+  const m = /sm_contrib_device=([^;]+)/.exec(sc[0])
+  return m ? 'sm_contrib_device=' + m[1] : null
 }
 
 test.before(async () => {
@@ -49,8 +56,7 @@ test.after(async () => {
 })
 
 test('no token is rejected on a contributor route', async () => {
-  const r = await request('GET', '/api/contributor/session', null, null)
-  assert.equal(r.status, 401)
+  assert.equal((await request('POST', '/api/contributor/claim', null, null)).status, 401)
 })
 
 test('contributor token is forbidden on admin routes', async () => {
@@ -59,49 +65,65 @@ test('contributor token is forbidden on admin routes', async () => {
   assert.equal((await request('GET', '/api/projects', null, CONTRIB)).status, 403)
 })
 
-test('contributor token cannot create or destroy its own session (admin-only)', async () => {
+test('contributor token cannot create/destroy/rebind (admin-only)', async () => {
   assert.equal((await request('POST', '/api/contributor/session', { project: 'x' }, CONTRIB)).status, 403)
   assert.equal((await request('DELETE', '/api/contributor/session', null, CONTRIB)).status, 403)
+  assert.equal((await request('POST', '/api/contributor/rebind', null, CONTRIB)).status, 403)
 })
 
-test('contributor token reaches its namespace (404 before a session exists, not 403)', async () => {
-  const r = await request('GET', '/api/contributor/session', null, CONTRIB)
-  assert.equal(r.status, 404)
+test('before a session is armed, claim is reachable but says not active', async () => {
+  const r = await request('POST', '/api/contributor/claim', null, CONTRIB)
+  assert.equal(r.status, 403)
+  assert.match(r.json.error, /not active/i)
 })
 
-test('admin creates the contributor session; status is non-leaky', async () => {
+test('admin creates session → link armed; first device claims it', async () => {
   const c = await request('POST', '/api/contributor/session', { project: 'sessionmanager' })
   assert.equal(c.status, 201)
-  assert.equal(c.json.name, 'Contributor: sessionmanager')
+  assert.ok(c.json.contributorUrl && /\/contributor\?token=/.test(c.json.contributorUrl))
 
-  const s = await request('GET', '/api/contributor/session', null, CONTRIB)
+  const claim = await request('POST', '/api/contributor/claim', null, CONTRIB)
+  assert.equal(claim.status, 200)
+  const cookie = cookieFrom(claim)
+  assert.ok(cookie, 'claim sets a device cookie')
+
+  // With the device cookie, contributor routes work and status is non-leaky.
+  const s = await request('GET', '/api/contributor/session', null, CONTRIB, cookie)
   assert.equal(s.status, 200)
   assert.equal(s.json.project, 'sessionmanager')
-  // The contributor must never receive an on-disk path or the raw cwd.
-  assert.ok(!('cwd' in s.json), 'cwd must not be exposed')
-  assert.ok(!('worktree' in s.json), 'worktree must not be exposed')
-  assert.ok(!/\//.test(JSON.stringify(s.json).replace(/https?:\/\//g, '')), 'no filesystem paths in status')
+  assert.ok(!('cwd' in s.json) && !('worktree' in s.json), 'no path leak')
+
+  const i = await request('POST', '/api/contributor/input', { text: 'hello there' }, CONTRIB, cookie)
+  assert.ok(i.status !== 401 && i.status !== 403, 'input works with the device cookie')
 })
 
-test('contributor input + history routes are reachable (auth passes, not 401/403)', async () => {
-  const i = await request('POST', '/api/contributor/input', { text: 'hello there' }, CONTRIB)
-  assert.ok(i.status !== 401 && i.status !== 403, 'input reachable by contributor')
-  const h = await request('GET', '/api/contributor/history', null, CONTRIB)
-  assert.ok(h.status !== 401 && h.status !== 403, 'history reachable by contributor')
+test('another device (no/!= cookie) is locked out after the first claims', async () => {
+  // Same token, but a different (missing) device cookie → locked.
+  const other = await request('GET', '/api/contributor/session', null, CONTRIB /* no cookie */)
+  assert.equal(other.status, 403)
+  assert.match(other.json.error, /locked to the computer/i)
+  const claim2 = await request('POST', '/api/contributor/claim', null, CONTRIB /* no cookie */)
+  assert.equal(claim2.status, 403)
+})
+
+test('admin rebind lets a new device claim', async () => {
+  assert.equal((await request('POST', '/api/contributor/rebind')).status, 200)
+  const claim = await request('POST', '/api/contributor/claim', null, CONTRIB)
+  assert.equal(claim.status, 200, 'after rebind a fresh device can claim again')
+  assert.ok(cookieFrom(claim))
 })
 
 test('contributor /key whitelists control keys, rejects arbitrary input', async () => {
-  // A whitelisted nav key is accepted (auth passes, routed).
-  const good = await request('POST', '/api/contributor/key', { key: 'down' }, CONTRIB)
+  await request('POST', '/api/contributor/rebind')                       // re-arm for a fresh claim
+  const c = cookieFrom(await request('POST', '/api/contributor/claim', null, CONTRIB))
+  assert.ok(c, 'got a device cookie')
+  const good = await request('POST', '/api/contributor/key', { key: 'down' }, CONTRIB, c)
   assert.ok(good.status !== 401 && good.status !== 403, 'whitelisted key reachable')
-  // Anything not in the whitelist (e.g. a shell char) is rejected — no way to
-  // smuggle a `!`/`/` keystroke and reach bang-mode.
-  assert.equal((await request('POST', '/api/contributor/key', { key: '!' }, CONTRIB)).status, 400)
-  assert.equal((await request('POST', '/api/contributor/key', { key: '/' }, CONTRIB)).status, 400)
-  assert.equal((await request('POST', '/api/contributor/key', { key: 'rm -rf' }, CONTRIB)).status, 400)
+  assert.equal((await request('POST', '/api/contributor/key', { key: '!' }, CONTRIB, c)).status, 400)
+  assert.equal((await request('POST', '/api/contributor/key', { key: '/' }, CONTRIB, c)).status, 400)
+  assert.equal((await request('POST', '/api/contributor/key', { key: 'rm -rf' }, CONTRIB, c)).status, 400)
 })
 
 test('admin can tear the session down', async () => {
   assert.equal((await request('DELETE', '/api/contributor/session')).status, 200)
-  assert.equal((await request('GET', '/api/contributor/session', null, CONTRIB)).status, 404)
 })

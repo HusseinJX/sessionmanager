@@ -3,8 +3,9 @@ import * as https from 'https'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import * as crypto from 'crypto'
 import type { SessionManager } from './session-manager'
-import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, updateSessionName, setSessionQueueRunning, updateSessionFields } from './store'
+import { getProjects, addProject, addSession, removeProject, removeSession, getTelegramConfig, setTelegramConfig, getTelegramNotificationsEnabled, setTelegramNotificationsEnabled, getTasksForProject, addTask, updateTask, removeTask, updateSessionNotes, updateSessionName, setSessionQueueRunning, updateSessionFields, getContributorBinding, setContributorBinding } from './store'
 import type { ProjectConfig, SessionConfig } from './store'
 import { getInbox, getItem, updateItem, resetInbox, getJob, addJob, updateJob, removeJob, addTicket, updateTicket, removeTicket, type FeedbackItem } from './triage-store'
 import { createWorktree, finalizeJobPr, cleanupWorktree } from './worktree'
@@ -86,6 +87,8 @@ export class HttpApiServer {
   private sessionManager: SessionManager
   private token: string
   private contributorToken: string
+  // How long the contributor link stays valid after the first device claims it.
+  private readonly contributorTtlMs = (parseFloat(process.env.SM_CONTRIBUTOR_TTL_DAYS || '2') || 2) * 86400000
   private port: number
   private tlsOptions: TlsOptions
   private rateLimitMap = new Map<string, RateLimitEntry>()
@@ -421,10 +424,17 @@ export class HttpApiServer {
         const contributorOk =
           urlPath.startsWith('/api/contributor/') &&
           !(req.method === 'POST' && urlPath === '/api/contributor/session') &&
-          !(req.method === 'DELETE' && urlPath === '/api/contributor/session')
+          !(req.method === 'DELETE' && urlPath === '/api/contributor/session') &&
+          !(urlPath === '/api/contributor/rebind')
         if (!contributorOk) {
           this.json(res, 403, { error: 'Forbidden' })
           return
+        }
+        // Every contributor action beyond the initial claim requires a valid,
+        // unexpired, device-locked binding.
+        if (urlPath !== '/api/contributor/claim') {
+          const acc = this.contributorAccessState(req)
+          if (!acc.ok) { this.json(res, 403, { error: acc.reason }); return }
         }
       }
     }
@@ -1346,8 +1356,43 @@ export class HttpApiServer {
         status: live?.status ?? 'exited',
         prUrl: existing.session.prUrl ?? null,
         prNote: existing.session.prNote ?? null,
-        ...(this.authRole(req) === 'admin' ? { contributorUrl: this.contributorLink(req) } : {}),
+        ...(this.authRole(req) === 'admin' ? { contributorUrl: this.contributorLink(req), binding: this.bindingSummary() } : {}),
       }, req)
+    }
+
+    // POST /api/contributor/claim — the contributor page calls this on load to
+    // bind the link to THIS device (first come). Sets an httpOnly cookie the
+    // server remembers; other computers with the same link are then locked out.
+    if (req.method === 'POST' && urlPath === '/api/contributor/claim') {
+      const b = getContributorBinding()
+      if (!b.armedAt) return this.json(res, 403, { error: 'This link is not active yet — ask John to start your session.' }, req)
+      const expired = !!(b.boundAt && Date.now() - b.boundAt > this.contributorTtlMs)
+      if (b.deviceHash && !expired) {
+        // Already claimed — only the same device may re-affirm.
+        const cookie = HttpApiServer.parseCookies(req)['sm_contrib_device']
+        if (cookie && HttpApiServer.sha256(cookie) === b.deviceHash) {
+          return this.json(res, 200, { ok: true, expiresAt: (b.boundAt || 0) + this.contributorTtlMs }, req)
+        }
+        return this.json(res, 403, { error: 'This link is locked to the computer that opened it first.' }, req)
+      }
+      if (b.deviceHash && expired) {
+        return this.json(res, 403, { error: 'This link has expired — ask John to restart your session.' }, req)
+      }
+      // Fresh (armed, not yet claimed) → bind this device.
+      const key = crypto.randomBytes(24).toString('hex')
+      const now = Date.now()
+      setContributorBinding({ armedAt: b.armedAt, deviceHash: HttpApiServer.sha256(key), boundAt: now, boundIp: this.getClientIp(req) })
+      const maxAge = Math.floor(this.contributorTtlMs / 1000)
+      res.setHeader('Set-Cookie', `sm_contrib_device=${key}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${maxAge}`)
+      return this.json(res, 200, { ok: true, expiresAt: now + this.contributorTtlMs }, req)
+    }
+
+    // POST /api/contributor/rebind (admin) — reset the device lock + expiry so a
+    // new computer can claim the link (e.g. teammate switched machines), WITHOUT
+    // restarting the session/worktree.
+    if (req.method === 'POST' && urlPath === '/api/contributor/rebind') {
+      this.armContributorLink()
+      return this.json(res, 200, { ok: true }, req)
     }
 
     // POST /api/contributor/input — {text}. A whole natural-language message, NOT
@@ -1645,6 +1690,8 @@ export class HttpApiServer {
       ptyOk = false
       console.error('[contributor] PTY spawn failed:', (e as Error)?.message)
     }
+    // Arm the link for a fresh device claim + a new expiry window.
+    this.armContributorLink()
     this.pushSse('session-created', { projectId: project.id, session })
     return { id: session.id, name, project: project.name, branch: wt ? wt.branch : null, ptyOk }
   }
@@ -1677,6 +1724,55 @@ export class HttpApiServer {
     if (!this.contributorToken) return null
     const host = req.headers['host'] || `localhost:${this.port}`
     return `https://${host}/contributor?token=${this.contributorToken}`
+  }
+
+  private static sha256(s: string): string { return crypto.createHash('sha256').update(s).digest('hex') }
+
+  // Admin-facing summary of the device lock / expiry state.
+  private bindingSummary(): { claimed: boolean; expired: boolean; expiresAt: number | null; boundIp: string | null; ttlDays: number } {
+    const b = getContributorBinding()
+    const expiresAt = b.boundAt ? b.boundAt + this.contributorTtlMs : null
+    return {
+      claimed: !!b.deviceHash,
+      expired: !!(expiresAt && Date.now() > expiresAt),
+      expiresAt,
+      boundIp: b.boundIp || null,
+      ttlDays: this.contributorTtlMs / 86400000,
+    }
+  }
+
+  private static parseCookies(req: http.IncomingMessage): Record<string, string> {
+    const out: Record<string, string> = {}
+    const raw = req.headers['cookie']
+    if (!raw) return out
+    for (const part of raw.split(';')) {
+      const i = part.indexOf('=')
+      if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim())
+    }
+    return out
+  }
+
+  // Arm the contributor link so the next device can claim it — a fresh expiry
+  // window. Called when an admin starts a session or resets the device lock.
+  private armContributorLink(): void {
+    setContributorBinding({ armedAt: Date.now() })
+  }
+
+  // Whether a contributor request currently has valid access: the link must be
+  // armed + claimed, the requesting device cookie must match the first claimer,
+  // and the expiry window must not have passed.
+  private contributorAccessState(req: http.IncomingMessage): { ok: boolean; reason?: string; expiresAt?: number } {
+    const b = getContributorBinding()
+    if (!b.armedAt) return { ok: false, reason: 'This link is not active yet — ask John to start your session.' }
+    if (!b.deviceHash) return { ok: false, reason: 'This link is active but not claimed yet — reload the page.' }
+    if (b.boundAt && Date.now() - b.boundAt > this.contributorTtlMs) {
+      return { ok: false, reason: 'This link has expired — ask John to restart your session.' }
+    }
+    const cookie = HttpApiServer.parseCookies(req)['sm_contrib_device']
+    if (!cookie || HttpApiServer.sha256(cookie) !== b.deviceHash) {
+      return { ok: false, reason: 'This link is locked to the computer that opened it first.' }
+    }
+    return { ok: true, expiresAt: b.boundAt ? b.boundAt + this.contributorTtlMs : undefined }
   }
 
   private serveTriageUi(res: http.ServerResponse): void {
