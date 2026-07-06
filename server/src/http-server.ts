@@ -1323,15 +1323,22 @@ export class HttpApiServer {
       }, req)
     }
 
-    // POST /api/contributor/input — {data}. Always and only the contributor session.
+    // POST /api/contributor/input — {text}. A whole natural-language message, NOT
+    // raw keystrokes: the contributor's read-only xterm can't feed the PTY, so
+    // there's no way to trigger Claude Code's `!` bash bang-mode or `/` slash
+    // commands. We defensively neutralize a leading `!`/`/` anyway (prepend a
+    // space so it's plain text), strip control bytes, then submit via
+    // submitCommand (text + \r as separate writes so Enter registers).
     if (req.method === 'POST' && urlPath === '/api/contributor/input') {
       this.readBody(req).then((body) => {
         try {
-          const { data } = JSON.parse(body || '{}') as { data?: string }
-          if (typeof data !== 'string') return this.json(res, 400, { error: 'data required' }, req)
+          const { text } = JSON.parse(body || '{}') as { text?: string }
+          if (typeof text !== 'string' || !text.trim()) return this.json(res, 400, { error: 'text required' }, req)
           const existing = this.getContributorSession()
           if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
-          const ok = this.sessionManager.writeToSession(existing.session.id, data)
+          let msg = text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').slice(0, 8000)
+          if (/^[!/]/.test(msg)) msg = ' ' + msg   // defeat bang-mode / slash-commands
+          const ok = this.sessionManager.submitCommand(existing.session.id, msg)
           return this.json(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'Session not running' }, req)
         } catch {
           return this.json(res, 400, { error: 'Invalid JSON' }, req)
@@ -1340,14 +1347,38 @@ export class HttpApiServer {
       return
     }
 
-    // GET /api/contributor/history — FILTERED prose view of the session output.
+    // GET /api/contributor/history?after=N — RAW PTY bytes for the read-only
+    // xterm (same delta protocol as the admin endpoint). Code/diffs are meant to
+    // be visible; the walls are the denied tools + worktree + no push.
     if (req.method === 'GET' && urlPath === '/api/contributor/history') {
       const existing = this.getContributorSession()
       if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
-      const text = this.filterForContributor(this.sessionManager.getHistory(existing.session.id))
+      const id = existing.session.id
+      const afterParam = url.searchParams.get('after')
+      const after = afterParam ? Math.max(0, parseInt(afterParam, 10) || 0) : NaN
+      const total = this.sessionManager.getHistoryBytesTotal(id)
+      const bodyText = Number.isFinite(after)
+        ? this.sessionManager.readHistoryRange(id, after)
+        : this.sessionManager.getHistory(id)
       this.cors(res, req)
-      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
-      res.end(text)
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Sm-Total-Bytes': String(total) })
+      res.end(bodyText)
+      return
+    }
+
+    // POST /api/contributor/resize — keep the PTY sized to the contributor's xterm.
+    if (req.method === 'POST' && urlPath === '/api/contributor/resize') {
+      this.readBody(req).then((body) => {
+        try {
+          const { cols, rows } = JSON.parse(body || '{}') as { cols?: number; rows?: number }
+          const existing = this.getContributorSession()
+          if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
+          if (cols && rows) this.sessionManager.resizeSession(existing.session.id, cols, rows)
+          return this.json(res, 200, { ok: true }, req)
+        } catch {
+          return this.json(res, 400, { error: 'Invalid JSON' }, req)
+        }
+      })
       return
     }
 
@@ -1542,30 +1573,6 @@ export class HttpApiServer {
     }
     this.pushSse('session-created', { projectId: project.id, session })
     return { id: session.id, name, project: project.name, branch: wt ? wt.branch : null, ptyOk }
-  }
-
-  // Readability pass on the raw PTY stream for the contributor's chat view. NOT
-  // a redaction layer — code and diffs are meant to be visible (the goal is only
-  // to prevent convenient bulk-download of the repo, which the denied tools +
-  // worktree + no-push already handle). This just strips terminal control noise
-  // and TUI box-drawing so Claude's output reads cleanly in a plain pane.
-  private filterForContributor(raw: string): string {
-    let s = raw
-    s = s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')            // CSI sequences
-    s = s.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')     // OSC sequences
-    s = s.replace(/\x1b[()][AB012]/g, '')                       // charset selects
-    s = s.replace(/\r/g, '')
-    s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')          // stray control bytes
-    const BOX = '│┃╭╮╰╯┌┐└┘├┤┬┴┼▔▁█▏▕▐░▒▓'
-    s = s.replace(new RegExp('[' + BOX + ']', 'g'), '')
-    const out: string[] = []
-    let blank = false
-    for (const rawLine of s.split('\n')) {
-      const line = rawLine.replace(/[ \t]+$/, '')
-      if (!line.trim()) { if (blank) continue; blank = true } else blank = false
-      out.push(line)
-    }
-    return out.join('\n').trim()
   }
 
   private serveContributorUi(res: http.ServerResponse): void {

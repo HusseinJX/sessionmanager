@@ -84,7 +84,7 @@ test('admin creates the contributor session; status is non-leaky', async () => {
 })
 
 test('contributor input + history routes are reachable (auth passes, not 401/403)', async () => {
-  const i = await request('POST', '/api/contributor/input', { data: 'hello\r' }, CONTRIB)
+  const i = await request('POST', '/api/contributor/input', { text: 'hello there' }, CONTRIB)
   assert.ok(i.status !== 401 && i.status !== 403, 'input reachable by contributor')
   const h = await request('GET', '/api/contributor/history', null, CONTRIB)
   assert.ok(h.status !== 401 && h.status !== 403, 'history reachable by contributor')
