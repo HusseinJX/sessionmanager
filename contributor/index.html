@@ -55,7 +55,7 @@
 <div id="termWrap"><div id="empty">Waiting for a session to be started for you…</div><div id="term" style="display:none"></div></div>
 <footer>
   <div class="keys" id="keys" title="Use these to answer Claude's on-screen menus (arrow-select, numbered options)">
-    <span class="lbl">Menu keys:</span>
+    <span class="lbl">Menu keys — or just use your keyboard (↑ ↓ Enter Esc) when the box is empty:</span>
     <button data-key="up" disabled>↑</button>
     <button data-key="down" disabled>↓</button>
     <button data-key="left" disabled>←</button>
@@ -154,7 +154,19 @@
     api('/input', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: msg }) }).then(function () { setTimeout(pumpHistory, 250); }).catch(function () {});
   }
-  input.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  // Keyboard model: when the message box is EMPTY, the arrow/Enter/Esc/Tab keys
+  // drive Claude's on-screen menus (forwarded to /key — a whitelist that can't
+  // express a bang/slash). Once you start typing, it's a normal box and Enter
+  // sends. So menus are keyboard-answerable without ever exposing a raw terminal.
+  var NAV = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', Escape: 'esc', Tab: 'tab' };
+  input.addEventListener('keydown', function (e) {
+    var empty = input.value.length === 0;
+    if (haveSession && empty) {
+      if (NAV[e.key]) { e.preventDefault(); sendKey(NAV[e.key]); return; }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendKey('enter'); return; }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
   sendBtn.addEventListener('click', send);
 
   submitBtn.addEventListener('click', function () {
