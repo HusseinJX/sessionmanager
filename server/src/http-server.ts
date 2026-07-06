@@ -1288,7 +1288,7 @@ export class HttpApiServer {
           const { project: projectName } = JSON.parse(body || '{}') as { project?: string }
           if (!projectName || typeof projectName !== 'string') return this.json(res, 400, { error: 'project required' }, req)
           const created = this.createContributorSession(projectName)
-          return this.json(res, 201, created, req)
+          return this.json(res, 201, { ...created, contributorUrl: this.contributorLink(req) }, req)
         } catch (e) {
           return this.json(res, 500, { error: String((e as Error)?.message || e) }, req)
         }
@@ -1307,7 +1307,9 @@ export class HttpApiServer {
       return this.json(res, 200, { ok: true }, req)
     }
 
-    // GET /api/contributor/session — minimal, non-leaky status for the chat UI
+    // GET /api/contributor/session — minimal, non-leaky status for the chat UI.
+    // For an admin caller, also include the teammate link (admin already holds
+    // full power, so handing back the contributor URL is not a leak).
     if (req.method === 'GET' && urlPath === '/api/contributor/session') {
       const existing = this.getContributorSession()
       if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
@@ -1320,6 +1322,7 @@ export class HttpApiServer {
         status: live?.status ?? 'exited',
         prUrl: existing.session.prUrl ?? null,
         prNote: existing.session.prNote ?? null,
+        ...(this.authRole(req) === 'admin' ? { contributorUrl: this.contributorLink(req) } : {}),
       }, req)
     }
 
@@ -1419,6 +1422,12 @@ export class HttpApiServer {
       updateSessionFields(existing.project.id, existing.session.id, { prUrl: pr.prUrl ?? undefined, prNote: pr.note })
       this.pushSse('job-pr', { sessionId: existing.session.id, projectName: existing.project.name, branch: pr.branch, prUrl: pr.prUrl, note: pr.note })
       return this.json(res, 200, pr, req)
+    }
+
+    // GET /contributor-admin — serve the admin start/stop panel (SM token)
+    if (req.method === 'GET' && (urlPath === '/contributor-admin' || urlPath === '/contributor-admin/')) {
+      this.serveStandaloneUi(res, 'contributor-admin')
+      return
     }
 
     // GET /contributor — serve the standalone Contributor chat UI
@@ -1603,11 +1612,16 @@ export class HttpApiServer {
   }
 
   private serveContributorUi(res: http.ServerResponse): void {
+    this.serveStandaloneUi(res, 'contributor')
+  }
+
+  // Serve a repo-root single-file page (like triage/, contributor/) by dir name.
+  private serveStandaloneUi(res: http.ServerResponse, dir: string): void {
     const candidates = [
-      path.join(__dirname, '../../contributor/index.html'),
-      path.join(__dirname, '../contributor/index.html'),
-      path.join(process.cwd(), 'contributor/index.html'),
-      path.join(process.cwd(), '../contributor/index.html'),
+      path.join(__dirname, `../../${dir}/index.html`),
+      path.join(__dirname, `../${dir}/index.html`),
+      path.join(process.cwd(), `${dir}/index.html`),
+      path.join(process.cwd(), `../${dir}/index.html`),
     ]
     for (const f of candidates) {
       if (fs.existsSync(f)) {
@@ -1616,7 +1630,15 @@ export class HttpApiServer {
         return
       }
     }
-    this.json(res, 404, { error: 'Contributor UI not found' })
+    this.json(res, 404, { error: `${dir} UI not found` })
+  }
+
+  // The teammate's contributor URL (admin-facing). Uses the host the admin
+  // reached us on, so it works behind a proxy or by raw IP:port.
+  private contributorLink(req: http.IncomingMessage): string | null {
+    if (!this.contributorToken) return null
+    const host = req.headers['host'] || `localhost:${this.port}`
+    return `https://${host}/contributor?token=${this.contributorToken}`
   }
 
   private serveTriageUi(res: http.ServerResponse): void {

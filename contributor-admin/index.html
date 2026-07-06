@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Contributor · Admin</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#2a323d; --text:#e6edf3; --muted:#8b949e;
+    --accent:#2f81f7; --go:#238636; --danger:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); min-height:100vh;
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; align-items:flex-start; justify-content:center; padding:40px 16px; }
+  .card { width:100%; max-width:560px; background:var(--panel); border:1px solid var(--border);
+    border-radius:14px; padding:24px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 20px; }
+  .status { display:flex; align-items:center; gap:8px; font-size:14px; margin-bottom:18px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .dot.live { background:var(--go); } .dot.dead { background:var(--danger); }
+  label { display:block; font-size:12px; color:var(--muted); margin:0 0 6px; }
+  input[type=text] { width:100%; padding:10px 12px; border-radius:8px; border:1px solid var(--border);
+    background:#0b0e13; color:var(--text); font:inherit; }
+  input:focus { outline:none; border-color:var(--accent); }
+  .row { display:flex; gap:10px; margin-top:14px; }
+  button { font:inherit; font-size:14px; padding:10px 18px; border-radius:8px; border:1px solid var(--border);
+    background:#1b222b; color:var(--text); cursor:pointer; }
+  button:hover:not(:disabled){ border-color:var(--accent); }
+  button.go { background:var(--go); border-color:var(--go); }
+  button.stop { background:#3a1d1f; border-color:#5c2b2e; color:#ffb4ae; }
+  button:disabled { opacity:.5; cursor:default; }
+  .link { margin-top:20px; padding:14px; border:1px solid var(--border); border-radius:10px; background:#0b0e13; }
+  .link .lbl { font-size:12px; color:var(--muted); margin-bottom:8px; }
+  .link .url { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; word-break:break-all;
+    color:var(--accent); }
+  .link .copy { margin-top:10px; }
+  .hint { font-size:12px; color:var(--muted); margin-top:16px; }
+  .pr { font-size:13px; color:var(--muted); margin-top:10px; } .pr a { color:var(--accent); }
+  .err { color:var(--danger); font-size:13px; margin-top:12px; min-height:16px; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Contributor session</h1>
+  <p class="sub">Start a restricted Claude for a teammate. They build via chat — no shell, no repo download, no push. Work lands as a PR you review.</p>
+
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">…</span></div>
+
+  <div id="startBox">
+    <label for="project">Project (a repo cloned on the server)</label>
+    <input type="text" id="project" value="community-marketplace" spellcheck="false" />
+    <div class="row"><button class="go" id="startBtn">Start session</button></div>
+  </div>
+
+  <div id="liveBox" class="hide">
+    <div class="link">
+      <div class="lbl">Send this link to your teammate:</div>
+      <div class="url" id="link"></div>
+      <button class="copy" id="copyBtn">Copy link</button>
+    </div>
+    <div class="pr" id="pr"></div>
+    <div class="row"><button class="stop" id="stopBtn">End session</button></div>
+  </div>
+
+  <div class="err" id="err"></div>
+  <div class="hint">Admin only. One contributor session at a time — starting a new one replaces the old.</div>
+</div>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var token = params.get('token') || localStorage.getItem('sm_token') || '';
+  if (params.get('token')) localStorage.setItem('sm_token', token);
+
+  var dot=document.getElementById('dot'), statusText=document.getElementById('statusText');
+  var startBox=document.getElementById('startBox'), liveBox=document.getElementById('liveBox');
+  var projectEl=document.getElementById('project'), startBtn=document.getElementById('startBtn');
+  var stopBtn=document.getElementById('stopBtn'), linkEl=document.getElementById('link');
+  var copyBtn=document.getElementById('copyBtn'), prEl=document.getElementById('pr'), errEl=document.getElementById('err');
+
+  function hdr(x){ return Object.assign({ 'Authorization':'Bearer '+token }, x||{}); }
+  function api(p,o){ o=o||{}; o.headers=hdr(o.headers); return fetch('/api/contributor'+p, o); }
+  function err(m){ errEl.textContent = m||''; }
+
+  function showNone(){ startBox.classList.remove('hide'); liveBox.classList.add('hide');
+    dot.className='dot'; statusText.textContent='No session running'; }
+  function showLive(s){
+    startBox.classList.add('hide'); liveBox.classList.remove('hide');
+    dot.className='dot '+(s.status==='running'?'live':'dead');
+    statusText.textContent=(s.status==='running'?'Live':'Ended')+' · '+s.project;
+    if(s.contributorUrl){ linkEl.textContent=s.contributorUrl; }
+    if(s.prUrl) prEl.innerHTML='Latest submit → <a href="'+s.prUrl+'" target="_blank" rel="noopener">pull request</a>';
+    else if(s.prNote) prEl.textContent='Latest submit: '+s.prNote; else prEl.textContent='';
+  }
+
+  function refresh(){
+    api('/session').then(function(r){
+      if(r.status===401||r.status===403){ dot.className='dot dead'; statusText.textContent='Unauthorized — check your token'; startBox.classList.add('hide'); return null; }
+      if(r.status===404){ showNone(); return null; }
+      return r.json();
+    }).then(function(s){ if(s) showLive(s); }).catch(function(){ statusText.textContent='Server offline?'; });
+  }
+
+  startBtn.addEventListener('click', function(){
+    var project=projectEl.value.trim(); if(!project) return err('Enter a project');
+    err(''); startBtn.disabled=true; statusText.textContent='Starting…';
+    api('/session',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({project:project}) })
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(x){ if(!x.ok) throw new Error(x.j.error||'failed'); refresh(); })
+      .catch(function(e){ err(e.message); }).finally(function(){ startBtn.disabled=false; });
+  });
+
+  stopBtn.addEventListener('click', function(){
+    if(!confirm('End the contributor session? Their work-in-progress worktree is discarded (submitted PRs are kept).')) return;
+    stopBtn.disabled=true;
+    api('/session',{ method:'DELETE' }).then(function(){ refresh(); }).catch(function(e){ err(e.message); })
+      .finally(function(){ stopBtn.disabled=false; });
+  });
+
+  copyBtn.addEventListener('click', function(){
+    var t=linkEl.textContent; if(!t) return;
+    navigator.clipboard.writeText(t).then(function(){ copyBtn.textContent='Copied!'; setTimeout(function(){ copyBtn.textContent='Copy link'; },1500); })
+      .catch(function(){ err('Copy failed — select the link manually'); });
+  });
+
+  if(!token){ statusText.textContent='Add ?token=<SM_TOKEN> to the URL'; startBox.classList.add('hide'); return; }
+  refresh(); setInterval(refresh, 4000);
+})();
+</script>
+</body>
+</html>
