@@ -90,6 +90,17 @@ test('contributor input + history routes are reachable (auth passes, not 401/403
   assert.ok(h.status !== 401 && h.status !== 403, 'history reachable by contributor')
 })
 
+test('contributor /key whitelists control keys, rejects arbitrary input', async () => {
+  // A whitelisted nav key is accepted (auth passes, routed).
+  const good = await request('POST', '/api/contributor/key', { key: 'down' }, CONTRIB)
+  assert.ok(good.status !== 401 && good.status !== 403, 'whitelisted key reachable')
+  // Anything not in the whitelist (e.g. a shell char) is rejected — no way to
+  // smuggle a `!`/`/` keystroke and reach bang-mode.
+  assert.equal((await request('POST', '/api/contributor/key', { key: '!' }, CONTRIB)).status, 400)
+  assert.equal((await request('POST', '/api/contributor/key', { key: '/' }, CONTRIB)).status, 400)
+  assert.equal((await request('POST', '/api/contributor/key', { key: 'rm -rf' }, CONTRIB)).status, 400)
+})
+
 test('admin can tear the session down', async () => {
   assert.equal((await request('DELETE', '/api/contributor/session')).status, 200)
   assert.equal((await request('GET', '/api/contributor/session', null, CONTRIB)).status, 404)

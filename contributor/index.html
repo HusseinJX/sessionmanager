@@ -37,6 +37,9 @@
   textarea { flex:1; resize:none; min-height:44px; max-height:180px; padding:10px 12px;
     border-radius:9px; border:1px solid var(--border); background:#0b0e13; color:var(--text); font:inherit; }
   textarea:focus { outline:none; border-color:var(--accent); }
+  .keys { max-width:1100px; margin:0 auto 8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .keys .lbl { font-size:11px; color:var(--muted); margin-right:2px; }
+  .keys button { padding:5px 10px; font-size:12px; min-width:34px; }
   .row2 { max-width:1100px; margin:8px auto 0; display:flex; justify-content:space-between; gap:12px; }
   .hint { font-size:11px; color:var(--muted); }
   .pr { font-size:12px; color:var(--muted); } .pr a { color:var(--accent); }
@@ -51,6 +54,18 @@
 </header>
 <div id="termWrap"><div id="empty">Waiting for a session to be started for you…</div><div id="term" style="display:none"></div></div>
 <footer>
+  <div class="keys" id="keys" title="Use these to answer Claude's on-screen menus (arrow-select, numbered options)">
+    <span class="lbl">Menu keys:</span>
+    <button data-key="up" disabled>↑</button>
+    <button data-key="down" disabled>↓</button>
+    <button data-key="left" disabled>←</button>
+    <button data-key="right" disabled>→</button>
+    <button data-key="enter" disabled>⏎ Enter</button>
+    <button data-key="esc" disabled>Esc</button>
+    <button data-key="1" disabled>1</button>
+    <button data-key="2" disabled>2</button>
+    <button data-key="3" disabled>3</button>
+  </div>
   <div class="composer">
     <textarea id="input" placeholder="Describe a change… (Enter to send, Shift+Enter for newline)" disabled></textarea>
     <button id="sendBtn" disabled>Send</button>
@@ -70,6 +85,7 @@
   var emptyEl = document.getElementById('empty'), termEl = document.getElementById('term');
   var input = document.getElementById('input'), sendBtn = document.getElementById('sendBtn');
   var submitBtn = document.getElementById('submitBtn'), prEl = document.getElementById('pr');
+  var keyBtns = Array.prototype.slice.call(document.querySelectorAll('#keys button[data-key]'));
 
   var haveSession = false, term = null, fit = null, termBytes = 0, connected = false;
 
@@ -80,7 +96,15 @@
     dot.className = 'dot ' + (live ? 'live' : 'dead');
     statusText.textContent = label;
     input.disabled = sendBtn.disabled = submitBtn.disabled = !live;
+    keyBtns.forEach(function (b) { b.disabled = !live; });
   }
+
+  function sendKey(key) {
+    if (!haveSession) return;
+    api('/key', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: key }) }).then(function () { setTimeout(pumpHistory, 200); }).catch(function () {});
+  }
+  keyBtns.forEach(function (b) { b.addEventListener('click', function () { sendKey(b.getAttribute('data-key')); }); });
 
   function ensureTerm() {
     if (term) return;

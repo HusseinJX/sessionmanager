@@ -1347,6 +1347,33 @@ export class HttpApiServer {
       return
     }
 
+    // POST /api/contributor/key — {key}. A single WHITELISTED control keystroke so
+    // the contributor can drive Claude Code's interactive menus (arrow-select
+    // prompts, "1. Yes / 2. No", plan-mode "how to proceed", Esc to cancel). Only
+    // these fixed sequences are allowed — none can express a leading `!` or `/`,
+    // so the bang-mode / slash-command escape stays closed.
+    if (req.method === 'POST' && urlPath === '/api/contributor/key') {
+      this.readBody(req).then((body) => {
+        try {
+          const { key } = JSON.parse(body || '{}') as { key?: string }
+          const KEYS: Record<string, string> = {
+            up: '\x1b[A', down: '\x1b[B', right: '\x1b[C', left: '\x1b[D',
+            enter: '\r', esc: '\x1b', tab: '\t', space: ' ', backspace: '\x7f',
+            '0': '0', '1': '1', '2': '2', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7', '8': '8', '9': '9',
+          }
+          const seq = key && Object.prototype.hasOwnProperty.call(KEYS, key) ? KEYS[key] : undefined
+          if (seq === undefined) return this.json(res, 400, { error: 'unknown key' }, req)
+          const existing = this.getContributorSession()
+          if (!existing) return this.json(res, 404, { error: 'No contributor session' }, req)
+          const ok = this.sessionManager.writeToSession(existing.session.id, seq)
+          return this.json(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'Session not running' }, req)
+        } catch {
+          return this.json(res, 400, { error: 'Invalid JSON' }, req)
+        }
+      })
+      return
+    }
+
     // GET /api/contributor/history?after=N — RAW PTY bytes for the read-only
     // xterm (same delta protocol as the admin endpoint). Code/diffs are meant to
     // be visible; the walls are the denied tools + worktree + no push.
