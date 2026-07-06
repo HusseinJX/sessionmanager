@@ -1479,6 +1479,7 @@ export class HttpApiServer {
       'Greet them in one line, ask what they want to build or change, and implement it once they confirm.'
     return [
       'claude',
+      '--model', 'sonnet',   // always Sonnet — never inherit the box default (e.g. Fable promo)
       '--permission-mode', 'acceptEdits',
       '--disallowedTools', '"Bash WebFetch"',
       '--allowedTools', '"Read Edit Write Grep Glob WebSearch TodoWrite"',
